@@ -153,7 +153,7 @@ export interface BoardRow {
   farm_steps: string[];
 }
 
-/** The dashboard's compact view of one row, with farm plans generated in the page. */
+/** The dashboard's compact view of one row: the board's own figures and farm plan, carried verbatim. */
 export interface RadarRow {
   rank: number;
   slug: string;
@@ -171,6 +171,10 @@ export interface RadarRow {
   maturity_multiplier: number;
   chain_multiplier: number;
   size_multiplier: number;
+  /** True when the snapshot's watchlist carries this slug; false for an early-radar row. */
+  watchlist: boolean;
+  /** The board's farm plan for this protocol, the same strings board.json carries. */
+  farm_steps: string[];
 }
 
 /** A live-token protocol: it already trades, so the board shows the market's own value, not a model's. */
@@ -668,8 +672,11 @@ export function liveRows(snapshot: Snapshot): LiveRow[] {
     }));
 }
 
-/** A board row's compact form for data.js, with the farm plan generated in the page. */
-export function radarRow(row: BoardRow): RadarRow {
+/**
+ * A board row's compact form for data.js. The farm plan and the watchlist flag travel with the row
+ * so the page renders board.json's own plan and scope, never a second derivation that could drift.
+ */
+export function radarRow(row: BoardRow, watchlist: boolean): RadarRow {
   return {
     rank: row.rank,
     slug: row.slug,
@@ -687,6 +694,8 @@ export function radarRow(row: BoardRow): RadarRow {
     maturity_multiplier: row.model.maturity_multiplier,
     chain_multiplier: row.model.chain_multiplier,
     size_multiplier: row.model.size_multiplier,
+    watchlist,
+    farm_steps: row.farm_steps,
   };
 }
 
@@ -705,7 +714,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     board_size: board.length,
     early_size: early,
     live_size: live.length,
-    rows: board.map(radarRow),
+    rows: board.map((r) => radarRow(r, snapshot.watchlist.includes(r.slug))),
     live,
   };
   return { board, radar };
