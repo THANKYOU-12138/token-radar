@@ -1,4 +1,4 @@
-// Token Radar, second model (radar-2): a dark console for the pre-token board. It reads window.RADAR
+// Token Radar, third model (radar-3): a dark console for the pre-token board. It reads window.RADAR
 // (written beside dashboard/ by main.ts from the same board that becomes board.json) and renders the
 // ranked board, a filterable table and a per-protocol detail drawer. The page derives nothing of its
 // own: every implied value, every multiplier and every farm step it shows is the board's own, carried
@@ -94,7 +94,7 @@
       else if (key === 'tvl') { av = a.tvl_usd; bv = b.tvl_usd; }
       else if (key === 'growth') { av = a.change_7d === null ? -Infinity : a.change_7d; bv = b.change_7d === null ? -Infinity : b.change_7d; }
       else if (key === 'age') { av = a.age_days === null ? Infinity : a.age_days; bv = b.age_days === null ? Infinity : b.age_days; }
-      else if (key === 'peer') { av = a.peer_multiple; bv = b.peer_multiple; }
+      else if (key === 'peer') { av = a.curve_multiple; bv = b.curve_multiple; }
       else { av = a.implied_value_usd; bv = b.implied_value_usd; }
       if (av < bv) return -state.dir;
       if (av > bv) return state.dir;
@@ -117,12 +117,12 @@
     return el('section', { class: 'lede' },
       el('div', null,
         el('h1', { text: DATA.board_size + ' pre-token protocols, priced before they have a token' }),
-        el('p', { text: 'Every protocol here has TVL and no token on record. The model prices each one from the snapshot itself: what live protocols in its category trade for, how fast it is growing, how long it has run, how many chains it spans. The ' + DATA.watchlist_size + '-protocol watchlist is the floor, never the ceiling; the early radar sweeps in the rest. Implied value is a model, not a promise.' })
+        el('p', { text: 'Every protocol here has TVL and no token on record. The model prices each one as an expected launch value: a comps curve fitted on the snapshot\'s live protocols says what a token would be worth, and the empirical launch rate of its category and age cohort says how likely that launch is. Growth, maturity, chains and size adjust the result. The ' + DATA.watchlist_size + '-protocol watchlist is the floor, never the ceiling; the board ranks every rankable pre-token protocol in the snapshot. Implied value is a model, not a promise.' })
       ),
       el('div', { class: 'facts' },
         el('div', { class: 'fact' }, el('span', { text: 'Watchlist covered' }), el('b', { text: DATA.watchlist_size + ' / ' + DATA.watchlist_size })),
         el('div', { class: 'fact' }, el('span', { text: 'Board rows scored' }), el('b', { text: String(DATA.board_size) })),
-        el('div', { class: 'fact' }, el('span', { text: 'Early rows below the floor' }), el('b', { text: String(DATA.early_size) })),
+        el('div', { class: 'fact' }, el('span', { text: 'Early rows beyond the watchlist' }), el('b', { text: String(DATA.early_size) })),
         el('div', { class: 'fact' }, el('span', { text: 'Live-token set aside' }), el('b', { text: String(DATA.live_size) }))
       )
     );
@@ -195,7 +195,7 @@
         el('td', { class: 'num', text: fmtUsd(r.tvl_usd) }),
         el('td', { class: 'num ' + growthClass, text: growth }),
         el('td', { class: 'num', text: fmtAge(r.age_days) }),
-        el('td', { class: 'num', text: fmtMult(r.peer_multiple) }),
+        el('td', { class: 'num', text: fmtMult(r.curve_multiple) }),
         el('td', null, el('div', { class: 'implied' },
           el('div', { class: 'bar', 'aria-hidden': 'true' }, el('i', { style: 'width:' + Math.max(3, Math.round((r.implied_value_usd / max) * 100)) + '%' })),
           el('span', { class: 'num implied-num', text: fmtUsd(r.implied_value_usd) })
@@ -206,14 +206,14 @@
     return el('div', { class: 'panel' },
       el('div', { class: 'table-wrap' },
         el('table', null,
-          el('caption', { class: 'sub', text: 'Pre-token protocols, strongest implied value first. WL is the watchlist floor; EARLY is a row the radar swept in below it. Select a row for its model and farm plan.' }),
+          el('caption', { class: 'sub', text: 'Pre-token protocols, strongest expected launch value first. WL is the watchlist floor; EARLY is every other rankable pre-token protocol — the board ranks all of them. Select a row for its model and farm plan.' }),
           el('thead', null, el('tr', null,
             sortHeader('implied', 'Rank'),
             sortHeader('name', 'Protocol'),
             sortHeader('tvl', 'TVL'),
             sortHeader('growth', '7d'),
             sortHeader('age', 'Age'),
-            sortHeader('peer', 'Peer x'),
+            sortHeader('peer', 'Curve x'),
             sortHeader('implied', 'Implied value')
           )),
           tbody
@@ -247,13 +247,18 @@
 
   function modelPanel() {
     var m = DATA.model;
+    var f = DATA.fit;
+    var v = DATA.validation;
+    var c = DATA.coverage;
     return el('section', { class: 'panel model' },
       el('h2', { text: 'How implied value is computed: the ' + DATA.model_version + ' model' }),
-      el('p', { class: 'sub', text: 'One function of the snapshot figures scores every row. No protocol name is special-cased, no row is hand-picked, and the peer multiple is read off the market itself: what the snapshot\'s live protocols in the same category actually trade for.' }),
+      el('p', { class: 'sub', text: 'One function of the snapshot figures scores every row. No protocol name is special-cased, no row is hand-picked. The price layer is fitted on the market itself, and the model validates itself on the snapshot at runtime — the validation figures below are recomputed on every run, not quoted from elsewhere.' }),
       el('div', { class: 'formula' },
-        'implied = round( TVL x peer x growth x maturity x chains x size )',
+        'implied = round( TVL x curve x odds x growth x maturity x chains x size )',
         el('br'),
-        'peer     = median mcap/TVL of the category\'s live protocols, winsorised at ' + m.peer_winsor_hi + ', shrunk toward the global median (k = ' + m.peer_shrink_k + '), clamped to [' + m.peer_floor + ', ' + m.peer_cap + ']; a category with no live peers uses ' + m.base_multiple,
+        'curve    = exp(' + f.a + ' + ' + f.b + ' x ln TVL + category shift) / TVL: a log-log comps curve fitted by least squares on the snapshot\'s ' + f.peers + ' live peers (R2 ' + f.r2 + '); a category with 5+ peers earns its own intercept shift, shrunk by n/(n+10)',
+        el('br'),
+        'odds     = the empirical token rate of the protocol\'s category x age cohort across ' + DATA.odds.cohorts + ' dated protocols (global rate ' + DATA.odds.global_rate + '), shrunk cell to bucket to global — the board ranks expected launch value, not launch value at any odds',
         el('br'),
         'growth   = 1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight,
         el('br'),
@@ -261,9 +266,11 @@
         el('br'),
         'chains   = 1 + ' + m.chain_step + ' per extra chain, at most ' + m.chain_max_steps + ' extra',
         el('br'),
-        'size     = 1 up to $' + Math.round(m.size_anchor_usd / 1e6) + 'M of TVL, then (anchor / TVL)^' + m.size_decay + ' — bulk alone does not top this board'
+        'size     = 1 up to $' + Math.round(m.size_anchor_usd / 1e6) + 'M of TVL, then (anchor / TVL)^' + m.size_decay + ' — bulk alone does not top this board',
+        el('br'),
+        'check    = leave-one-out median pricing error: curve ' + v.curve_loo_error_x + 'x vs category medians ' + v.median_loo_error_x + 'x; launch-odds Brier ' + v.odds_brier + ' vs base rate ' + v.odds_base_brier + ' on a time-split holdout of ' + v.odds_test_n + ' protocols'
       ),
-      el('p', { class: 'sub', text: 'The board is the whole watchlist, every other rankable pre-token protocol at or above $10M of TVL, and the fastest growers between $5M and $10M (7d change of at least +30%, at most 25). Token-live protocols are never ranked; they are set aside in the Live token view, where the priced ones serve as the peer set.' })
+      el('p', { class: 'sub', text: 'The board ranks every rankable pre-token protocol in the snapshot. Whole-snapshot accounting: ' + c.ranked + ' ranked + ' + c.live + ' already holding a token (set aside in the Live token view; the priced ones are the curve\'s peer set) + ' + c.excluded + ' excluded with reason (centralised exchanges and versioned pools of other protocols) = ' + c.total + ' protocols.' })
     );
   }
 
@@ -295,7 +302,8 @@
       el('h3', { text: 'Implied value: the board\'s own arithmetic' }),
       el('div', { class: 'equation' },
         factorRow('TVL', 'snapshot', fmtUsd(row.tvl_usd)),
-        factorRow('Peer multiple', (row.category || 'category') + ' live peers, mcap/TVL', fmtMult(row.peer_multiple)),
+        factorRow('Curve multiple', 'fitted log-log comps at this TVL, ' + (row.category || 'category') + ' shift', fmtMult(row.curve_multiple)),
+        factorRow('Launch odds', (row.category || 'category') + ' x age cohort token rate', fmtMult(row.launch_odds)),
         factorRow('Growth multiplier', '7d change ' + fmtPct(row.change_7d), fmtMult(row.growth_multiplier)),
         factorRow('Maturity multiplier', fmtAge(row.age_days) + ' with no token', fmtMult(row.maturity_multiplier)),
         factorRow('Chain multiplier', (row.chains ? row.chains.length : 0) + ' chain' + (row.chains && row.chains.length === 1 ? '' : 's'), fmtMult(row.chain_multiplier)),
