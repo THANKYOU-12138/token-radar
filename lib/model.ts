@@ -616,7 +616,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       size_multiplier: round4(s.sizeMult),
       age_days: s.age,
     },
-    farm_steps: farmSteps(s.p, s.age).map(stepText),
+    farm_steps: farmSteps(s.p, s.age, i < 20).map(stepText),
   }));
 }
 
@@ -822,12 +822,38 @@ const PLAYBOOKS: Record<FarmFamily, { core: (x: PlanContext) => string; second: 
   },
 };
 
+/** A compact dollar figure for prose: $7.91B, $101.1M, $250K. */
+function fmtUsdCompact(n: number): string {
+  if (n >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
+  if (n >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
+  if (n >= 1e3) return `$${Math.round(n / 1e3)}K`;
+  return `$${Math.round(n)}`;
+}
+
+/**
+ * The spotlight opener for a top-20 row: why this protocol, from its own record — its TVL, its
+ * chains, its week, its age — before the wallet instruction every plan starts with. The figures
+ * are the snapshot's, so the sentence is checkable against the row it opens.
+ */
+function spotlightText(p: SnapshotProtocol, age: number | null): string {
+  const chains =
+    p.chains.length === 0 ? 'an unrecorded chain set' : `${p.chains.length} chain${p.chains.length === 1 ? '' : 's'} (${p.chains.slice(0, 3).join(', ')}${p.chains.length > 3 ? ', …' : ''})`;
+  const growth =
+    p.change_7d === null
+      ? 'its 7-day TVL change is unrecorded'
+      : `its TVL ${p.change_7d >= 0 ? 'grew' : 'moved'} ${p.change_7d >= 0 ? '+' : ''}${p.change_7d.toFixed(2)}% in the last 7 days`;
+  const agePhrase =
+    age === null ? 'an unrecorded start date' : age >= 730 ? `${(age / 365).toFixed(1)} years` : age >= 365 ? 'over a year' : `${age} days`;
+  return `Why this row, from its own record: ${p.name} holds ${fmtUsdCompact(p.tvl_usd)} of TVL on ${chains}, ${growth}, and has run ${agePhrase} with no token on record. Use a fresh wallet that holds only the funds you plan to farm with ${p.name}, and keep its seed phrase offline.`;
+}
+
 /**
  * A protocol's farm plan: seven steps, each an action with a cost and a time. The plan is a
  * playbook for the protocol's category, priced and placed from its own record (chains, TVL, age) —
- * never from a hand-written list of names.
+ * never from a hand-written list of names. The board's top 20 rows open with a spotlight step
+ * written from the protocol's own figures instead of the generic wallet step.
  */
-export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
+export function farmSteps(p: SnapshotProtocol, age: number | null, spotlight = false): FarmStep[] {
   const chain = chainOf(p);
   const x: PlanContext = {
     name: p.name,
@@ -840,7 +866,7 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
   const book = PLAYBOOKS[familyFor(p.category)];
   return [
     {
-      text: `Use a fresh wallet that holds only the funds you plan to farm with ${x.name}, and keep its seed phrase offline.`,
+      text: spotlight ? spotlightText(p, age) : `Use a fresh wallet that holds only the funds you plan to farm with ${x.name}, and keep its seed phrase offline.`,
       cost: 'nothing to create, under $3 of gas to fund',
       time: '5 minutes',
     },

@@ -10,7 +10,7 @@
   var DATA = window.RADAR;
   if (!DATA) return;
   var app = document.getElementById('board');
-  var state = { q: '', category: 'all', scope: 'all', tab: 'pre-token', sort: 'implied', dir: -1, selected: null };
+  var state = { q: '', category: 'all', scope: 'all', tab: 'pre-token', sort: 'implied', dir: -1, selected: null, view: 'board' };
 
   var usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
   function fmtUsd(n) {
@@ -63,6 +63,7 @@
     if (params.get('p')) state.selected = params.get('p');
     if (params.get('category')) state.category = params.get('category');
     if (params.get('scope')) state.scope = params.get('scope');
+    if (params.get('view')) state.view = params.get('view');
   }
   function writeHash() {
     var params = new URLSearchParams();
@@ -253,6 +254,7 @@
     return el('section', { class: 'panel model' },
       el('h2', { text: 'How implied value is computed: the ' + DATA.model_version + ' model' }),
       el('p', { class: 'sub', text: 'One function of the snapshot figures scores every row. No protocol name is special-cased, no row is hand-picked. The price layer is fitted on the market itself, and the model validates itself on the snapshot at runtime — the validation figures below are recomputed on every run, not quoted from elsewhere.' }),
+      el('p', { class: 'sub', text: 'In short: this entry prices a launch, not a multiple. The curve says what a token would be worth; the odds layer discounts that by how likely the launch is, cohort by cohort; growth, maturity, chains and size adjust. Out of sample, the curve prices live peers at ' + v.curve_loo_error_x + 'x median error against ' + v.median_loo_error_x + 'x for the category medians it replaces, and the odds beat the base rate on a time-split holdout (Brier ' + v.odds_brier + ' vs ' + v.odds_base_brier + ').' }),
       el('div', { class: 'formula' },
         'implied = round( TVL x curve x odds x growth x maturity x chains x size )',
         el('br'),
@@ -333,6 +335,12 @@
     app.textContent = '';
     var shell = el('div', { class: 'shell' });
     shell.appendChild(header());
+    if (state.view === 'model') {
+      shell.appendChild(modelPanel());
+      app.appendChild(shell);
+      app.setAttribute('aria-busy', 'false');
+      return;
+    }
     shell.appendChild(lede());
     shell.appendChild(controls());
     shell.appendChild(state.tab === 'pre-token' ? boardTable() : liveTable());
