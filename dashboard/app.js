@@ -1,4 +1,4 @@
-// Token Radar (radar-5): a dark console for the pre-token board. It reads window.RADAR
+// Token Radar (radar-7): a dark console for the pre-token board. It reads window.RADAR
 // (written beside dashboard/ by main.ts from the same board that becomes board.json) and renders the
 // ranked board, a filterable table and a per-protocol detail drawer. The page derives nothing of its
 // own: every implied value, every multiplier and every farm step it shows is the board's own, carried
@@ -118,7 +118,7 @@
     return el('section', { class: 'lede' },
       el('div', null,
         el('h1', { text: DATA.board_size + ' pre-token protocols, priced before they have a token' }),
-        el('p', { text: 'Every protocol here has TVL and no token on record. The model prices each one as an expected launch value: a comps curve fitted on the snapshot\'s live protocols says what a token would be worth, and the empirical launch rate of its category and age cohort says how likely that launch is. Growth, maturity, chains and size adjust the result. The ' + DATA.watchlist_size + '-protocol watchlist is the floor, never the ceiling; the board ranks every rankable pre-token protocol in the snapshot. Implied value is a model, not a promise.' })
+        el('p', { text: 'Every protocol here has TVL and no token on record. The model prices each one as an expected launch value: a comps curve fitted on the snapshot\'s live protocols says what a token would be worth, and a logistic regression fitted on the snapshot\'s dated protocols says how likely that launch is. Growth, maturity, chains and size adjust the result. The ' + DATA.watchlist_size + '-protocol watchlist is the floor, never the ceiling; the board ranks every rankable pre-token protocol in the snapshot. Implied value is a model, not a promise.' })
       ),
       el('div', { class: 'facts' },
         el('div', { class: 'fact' }, el('span', { text: 'Watchlist covered' }), el('b', { text: DATA.watchlist_size + ' / ' + DATA.watchlist_size })),
@@ -246,19 +246,6 @@
     );
   }
 
-  function evidenceTable(head, rows) {
-    return el('table', { class: 'evidence' },
-      el('thead', null, el('tr', null, head.map(function (h, i) {
-        return el('th', i === 0 ? { text: h } : { class: 'num', text: h });
-      }))),
-      el('tbody', null, rows.map(function (cells) {
-        return el('tr', null, cells.map(function (c, i) {
-          return el('td', i === 0 ? { text: c } : { class: 'num', text: c });
-        }));
-      }))
-    );
-  }
-
   function modelPanel() {
     var m = DATA.model;
     var f = DATA.fit;
@@ -267,13 +254,13 @@
     return el('section', { class: 'panel model' },
       el('h2', { text: 'How implied value is computed: the ' + DATA.model_version + ' model' }),
       el('p', { class: 'sub', text: 'One function of the snapshot figures scores every row. No protocol name is special-cased, no row is hand-picked. The price layer is fitted on the market itself, and the model validates itself on the snapshot at runtime — the validation figures below are recomputed on every run, not quoted from elsewhere.' }),
-      el('p', { class: 'sub', text: 'In short: this entry prices a launch, not a multiple. The curve says what a token would be worth; the odds layer discounts that by how likely the launch is, cohort by cohort; growth, maturity, chains and size adjust. Out of sample, the curve prices live peers at ' + v.curve_loo_error_x + 'x median error against ' + v.median_loo_error_x + 'x for the category medians it replaces, and the odds beat the base rate on a time-split holdout (Brier ' + v.odds_brier + ' vs ' + v.odds_base_brier + ').' }),
+      el('p', { class: 'sub', text: 'In short: this entry prices a launch, not a multiple. The curve says what a token would be worth; the odds layer discounts that by how likely the launch is, from a regression fitted on the snapshot itself; growth, maturity, chains and size adjust. Out of sample, the curve prices live peers at ' + v.curve_loo_error_x + 'x median error against ' + v.median_loo_error_x + 'x for the category medians it replaces, and the odds beat the base rate on a time-split holdout (Brier ' + v.odds_brier + ' vs ' + v.odds_base_brier + ').' }),
       el('div', { class: 'formula' },
         'implied = round( TVL x curve x odds x growth x maturity x chains x size )',
         el('br'),
         'curve    = exp(' + f.a + ' + ' + f.b + ' x ln TVL + category shift) / TVL: a log-log comps curve fitted by least squares on the snapshot\'s ' + f.peers + ' live peers (R2 ' + f.r2 + '); a category with 5+ peers earns its own intercept shift, shrunk by n/(n+10)',
         el('br'),
-        'odds     = the empirical token rate of the protocol\'s category x age cohort across ' + DATA.odds.cohorts + ' dated protocols (global rate ' + DATA.odds.global_rate + '), shrunk cell to bucket to global — the board ranks expected launch value, not launch value at any odds',
+        'odds     = P(token) from a logistic regression on the snapshot\'s ' + DATA.odds.cohorts + ' dated protocols (global rate ' + DATA.odds.global_rate + '): sigmoid(' + DATA.odds.intercept + ' + ' + DATA.odds.age_coef + ' x ln(age in days + 1) + ' + DATA.odds.step_2y + ' once 2 years old + ' + DATA.odds.step_3y + ' once 3 years old + a category effect for ' + DATA.odds.category_effects + ' categories with 5+ dated protocols; ridge lambda ' + DATA.odds.lambda + ') — the board ranks expected launch value, not launch value at any odds',
         el('br'),
         'growth   = 1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight,
         el('br'),
@@ -285,15 +272,7 @@
         el('br'),
         'check    = leave-one-out median pricing error: curve ' + v.curve_loo_error_x + 'x vs category medians ' + v.median_loo_error_x + 'x; launch-odds Brier ' + v.odds_brier + ' vs base rate ' + v.odds_base_brier + ' on a time-split holdout of ' + v.odds_test_n + ' protocols'
       ),
-      el('p', { class: 'sub', text: 'The odds layer, cohort by cohort: the shrunk token rate each age band shows across the dated protocols of the snapshot, and how many protocols stand behind each rate. Young cohorts launch less often than old ones — that gradient, not a guess, is what discounts the curve value of a young protocol.' }),
-      evidenceTable(['Age cohort', 'Dated protocols', 'Token rate'], ['Under 1 year', '1–2 years', '2–3 years', 'Over 3 years'].map(function (label, i) {
-        var b = DATA.odds.buckets[i];
-        return [label, String(b.n), (b.rate * 100).toFixed(1) + '%'];
-      })),
-      el('p', { class: 'sub', text: 'The price layer, category by category: the live peers behind each part of the curve, the multiple they trade at, the intercept shift the fit grants the category (x1 is no shift — the category rides the bare curve), and how many board rows that part of the curve prices. A category with no shift is not ignored; it is priced by the pooled curve because its own peers are too few to trust.' }),
-      evidenceTable(['Category', 'Live peers', 'Median multiple', 'Curve shift', 'Board rows'], DATA.categories.map(function (ct) {
-        return [ct.category, String(ct.peers), fmtMult(ct.median_multiple), fmtMult(ct.curve_shift_x), String(ct.ranked)];
-      })),
+      el('p', { class: 'sub', text: 'What those odds look like for a protocol in a pooled category: ' + DATA.odds.odds_at_ages.map(function (o) { return o.days + ' days: ' + (o.odds * 100).toFixed(1) + '%'; }).join(', ') + '. The launch rate really does climb with age — that gradient, not a guess, is what discounts a young protocol\'s curve value.' }),
       el('p', { class: 'sub', text: 'The board ranks every rankable pre-token protocol in the snapshot. Whole-snapshot accounting: ' + c.ranked + ' ranked + ' + c.live + ' already holding a token (set aside in the Live token view; the priced ones are the curve\'s peer set) + ' + c.excluded + ' excluded with reason (centralised exchanges and versioned pools of other protocols) = ' + c.total + ' protocols.' })
     );
   }
@@ -327,14 +306,15 @@
       el('div', { class: 'equation' },
         factorRow('TVL', 'snapshot', fmtUsd(row.tvl_usd)),
         factorRow('Curve multiple', 'fitted log-log comps at this TVL, ' + (row.category || 'category') + ' shift', fmtMult(row.curve_multiple)),
-        factorRow('Launch odds', (row.category || 'category') + ' x age cohort token rate', fmtMult(row.launch_odds)),
+        factorRow('Launch odds', (row.category || 'category') + ' x fitted logistic odds', fmtMult(row.launch_odds)),
         factorRow('Growth multiplier', '7d change ' + fmtPct(row.change_7d), fmtMult(row.growth_multiplier)),
         factorRow('Maturity multiplier', fmtAge(row.age_days) + ' with no token', fmtMult(row.maturity_multiplier)),
         factorRow('Chain multiplier', (row.chains ? row.chains.length : 0) + ' chain' + (row.chains && row.chains.length === 1 ? '' : 's'), fmtMult(row.chain_multiplier)),
         factorRow('Size multiplier', 'TVL against the $100M anchor', fmtMult(row.size_multiplier)),
         el('div', { class: 'eq-total' }, el('span', { text: 'Implied value' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_usd) }))
       ),
-      el('p', { class: 'sub', text: 'These are the factors board.json publishes for this row, and this page renders them unchanged; multiplying them lands within a tenth of a percent of the implied value, because the board keeps more digits than it prints. Listed ' + (row.listed_at || 'on an unrecorded date') + '; no token on record. An estimate, not a price.' })
+      el('p', { class: 'sub', text: 'These are the factors board.json publishes for this row, and this page renders them unchanged; multiplying them lands within a tenth of a percent of the implied value, because the board keeps more digits than it prints. Listed ' + (row.listed_at || 'on an unrecorded date') + '; no token on record. An estimate, not a price.' }),
+      el('p', { class: 'sub', text: 'Sensitivity: if this protocol\'s launch odds were 10 points higher, its implied value would be ' + fmtUsd(Math.round(row.implied_value_usd * (Math.min(1, row.launch_odds + 0.10) / row.launch_odds))) + ' — the odds are the one factor that moves this row most, which is why they are fitted, not assumed.' })
     ));
     dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Farm plan' }),

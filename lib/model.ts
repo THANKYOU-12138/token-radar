@@ -1,11 +1,8 @@
-// The token radar's model (radar-5): one snapshot of the protocol universe in, one ranked board out.
-// radar-5 keeps radar-4's pricing exactly as it was — the same fitted curve, the same launch
-// odds, the same multipliers, the same board values in the same order — and changes what the
-// entry shows and how its plans read. The model panel now prints the evidence under the two
-// fitted layers (the launch rate of each age cohort, and each category's live peers, their
-// median multiple and the intercept shift the curve grants it), and a farm plan's funding and
-// hold steps are placed from the protocol's own record — its chains and its age — the way
-// radar-4 already wrote every plan's opening step from that record.
+// The token radar's model (radar-7): one snapshot of the protocol universe in, one ranked board out.
+// radar-7 keeps radar-4's fitted comps curve and every signal multiplier exactly as they were —
+// the curve was re-tested against robust, joint-dummy, Theil-Sen and size-floored fits and stayed
+// the best of them (leave-one-out median error 3.18x, against 3.25x–3.54x for the alternatives) —
+// and changes the launch-odds layer and the farm plans' exit step.
 //
 // The board ranks EVERY rankable pre-token protocol in the snapshot (pre-token: no market cap, no
 // CoinGecko id, no symbol on record; rankable: not a CEX, not a versioned pool of another protocol).
@@ -14,17 +11,21 @@
 // values, never mixed into the ranked board. The page accounts for the whole snapshot:
 // ranked + live + excluded = total.
 //
-// radar-3 prices an EXPECTED launch value, in two fitted layers over radar-2's signal multipliers:
+// radar-7 prices an EXPECTED launch value, in two fitted layers over radar-2's signal multipliers:
 //
 //   curve      = a log-log comps curve fitted by least squares on the snapshot's live peers:
 //                ln(mcap) = a + b x ln(TVL), plus a per-category intercept shift (the category's
 //                median residual, shrunk by n / (n + 10), for categories with 5+ peers).
 //                curveMult = exp(a + b x ln(TVL) + shift) / TVL. radar-2 priced off category
 //                medians of mcap/TVL; the curve uses the size gradient the medians throw away.
-//   odds       = the empirical launch rate of the protocol's category x age cohort, computed from
-//                the snapshot's dated protocols (shrunk: cell -> age-bucket rate -> global rate).
-//                A pre-token protocol is worth its implied value only if it launches, so the board
-//                ranks by implied x odds, not by implied alone.
+//   odds       = a logistic regression on the snapshot's dated protocols: P(token) is a sigmoid
+//                of ln(age_days + 1), two step indicators (age at least 2 years, at least 3),
+//                and a per-category effect for categories with 5+ dated protocols, fitted by
+//                ridge-penalised IRLS (lambda 5, intercept unpenalised). The steps are there
+//                because the empirical launch rate jumps — 0.36 at 1–2 years, 0.56 at 2–3,
+//                0.83 at 3–5 — and a smooth log-age term alone irons that jump flat. A pre-token
+//                protocol is worth its implied value only if it launches, so the board ranks by
+//                implied x odds, not by implied alone.
 //   growth     = clamp(change_7d, -60, 120) per cent;  growthMult = 1 + (growth / 100) x GROWTH_WEIGHT
 //   maturity   = 0.6 + min(age_days, 1095) / 1095 x 0.4   (age_days unknown: 365)
 //   chains     = 1 + CHAIN_STEP x min(chains - 1, CHAIN_MAX_STEPS)
@@ -108,10 +109,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-5';
-
-/** Age cohorts for the launch-odds layer, in days: under a year, one to two, two to three, older. */
-export const ODDS_AGE_BUCKETS = [365, 730, 1095];
+export const MODEL_VERSION = 'radar-7';
 
 /** A category needs at least this many live peers before the comps curve trusts its own shift. */
 export const CURVE_SHIFT_MIN_PEERS = 5;
@@ -211,23 +209,22 @@ export interface FitSummary {
 export interface OddsSummary {
   /** The token rate across every dated protocol in the snapshot. */
   global_rate: number;
-  /** How many dated protocols the cohort rates were computed from. */
+  /** How many dated protocols the odds were fitted on. */
   cohorts: number;
-  /** The four age cohorts, youngest first: dated protocols in each and the shrunk token rate. */
-  buckets: { n: number; rate: number }[];
-}
-
-/** One category's evidence row for the model panel: its live peers, their pricing, its curve shift, and how many board rows it carries. */
-export interface CategoryEvidence {
-  category: string;
-  /** Live peers in this category that carry both a market cap and a TVL. */
-  peers: number;
-  /** The median mcap/TVL of those peers, winsorised the way the model winsorises. */
-  median_multiple: number;
-  /** The curve's intercept for this category as a multiple of the bare curve (1 when it earned no shift). */
-  curve_shift_x: number;
-  /** Board rows ranked in this category. */
-  ranked: number;
+  /** The logistic's intercept: the log-odds of a protocol aged zero days, pooled category. */
+  intercept: number;
+  /** The logistic's slope on ln(age_days + 1). */
+  age_coef: number;
+  /** The logistic's step at two years of age, in log-odds. */
+  step_2y: number;
+  /** The logistic's step at three years of age, in log-odds. */
+  step_3y: number;
+  /** How many categories earned their own effect in the fit. */
+  category_effects: number;
+  /** The ridge penalty the fit used (the intercept is never penalised). */
+  lambda: number;
+  /** The pooled-category odds at a few ages, so the layer can be read at a glance. */
+  odds_at_ages: { days: number; odds: number }[];
 }
 
 /** The model's runtime self-validation on the sealed snapshot (see validateModel). */
@@ -263,7 +260,6 @@ export interface RadarData {
   odds: OddsSummary;
   validation: ValidationSummary;
   coverage: CoverageSummary;
-  categories: CategoryEvidence[];
   watchlist_size: number;
   board_size: number;
   early_size: number;
@@ -312,8 +308,6 @@ export interface PeerMultiples {
   peers: number;
   /** The shrunk, clamped multiple for one category; the global when the category has no peers. */
   forCategory: (category: string | null) => number;
-  /** Each peer category's own evidence: how many live peers it has and their median multiple. */
-  categoryStats: { category: string; peers: number; median_multiple: number }[];
 }
 
 /**
@@ -351,10 +345,7 @@ export function peerMultiples(snapshot: Snapshot, model: ModelConstants = MODEL)
     cache.set(category, mult);
     return mult;
   };
-  const categoryStats = [...byCategory.entries()]
-    .map(([category, list]) => ({ category, peers: list.length, median_multiple: median(list) ?? global }))
-    .sort((x, y) => y.peers - x.peers || (x.category < y.category ? -1 : 1));
-  return { global, peers: peers.length, forCategory, categoryStats };
+  return { global, peers: peers.length, forCategory };
 }
 
 /** The snapshot's live peers: a token on record, a market cap and a TVL, and not a CEX. */
@@ -387,8 +378,6 @@ export interface CompsFit {
   peers: number;
   impliedFor: (p: SnapshotProtocol) => number;
   multFor: (p: SnapshotProtocol) => number;
-  /** The shrunk per-category intercept shift in log space; 0 when the category earned none. */
-  shiftFor: (category: string | null) => number;
 }
 
 /**
@@ -407,7 +396,6 @@ export function fitComps(snapshot: Snapshot, excludeSlug?: string, model: ModelC
       peers: peers.length,
       impliedFor: (p) => p.tvl_usd * model.base_multiple,
       multFor: () => model.base_multiple,
-      shiftFor: () => 0,
     };
   }
   const xs = peers.map((p) => Math.log(p.tvl_usd));
@@ -434,42 +422,88 @@ export function fitComps(snapshot: Snapshot, excludeSlug?: string, model: ModelC
   }
   const impliedFor = (p: SnapshotProtocol): number =>
     p.tvl_usd > 0 ? Math.exp(a + b * Math.log(p.tvl_usd) + (p.category === null ? 0 : shifts.get(p.category) ?? 0)) : 0;
-  return {
-    a,
-    b,
-    r2: ssTot > 0 ? 1 - ssRes / ssTot : 0,
-    peers: peers.length,
-    impliedFor,
-    multFor: (p) => (p.tvl_usd > 0 ? impliedFor(p) / p.tvl_usd : 0),
-    shiftFor: (category) => (category === null ? 0 : shifts.get(category) ?? 0),
-  };
+  return { a, b, r2: ssTot > 0 ? 1 - ssRes / ssTot : 0, peers: peers.length, impliedFor, multFor: (p) => (p.tvl_usd > 0 ? impliedFor(p) / p.tvl_usd : 0) };
 }
 
-/** The launch-odds layer: the empirical token rate of a protocol's category x age cohort. */
+/** The launch-odds layer: a fitted logistic regression on the snapshot's dated protocols. */
 export interface LaunchOdds {
   /** The token rate across the whole training pool. */
   global: number;
-  /** How many dated protocols stand behind the cohort rates. */
+  /** How many dated protocols stand behind the fit. */
   cohorts: number;
+  /** The fitted intercept (log-odds at age zero, pooled category). */
+  intercept: number;
+  /** The fitted slope on ln(age_days + 1). */
+  age_coef: number;
+  /** The fitted step at two years of age, in log-odds. */
+  step_2y: number;
+  /** The fitted step at three years of age, in log-odds. */
+  step_3y: number;
+  /** How many categories earned their own effect. */
+  category_effects: number;
+  /** The pooled-category odds at a few ages. */
+  odds_at_ages: { days: number; odds: number }[];
   forProtocol: (p: SnapshotProtocol) => number;
-  /** The four age cohorts in ODDS_AGE_BUCKETS order: dated protocols in each, and its shrunk rate. */
-  buckets: { n: number; rate: number }[];
 }
 
-/** Which age cohort a day count falls in: 0 youngest .. 3 oldest, per ODDS_AGE_BUCKETS. */
-function oddsBucket(age: number): number {
-  if (age < ODDS_AGE_BUCKETS[0]!) return 0;
-  if (age < ODDS_AGE_BUCKETS[1]!) return 1;
-  if (age < ODDS_AGE_BUCKETS[2]!) return 2;
-  return 3;
+/** The ages the dashboard quotes the pooled odds at, in days. */
+export const ODDS_AT_AGES = [90, 365, 730, 1460];
+
+/** The ridge penalty on every fitted coefficient except the intercept. */
+export const ODDS_LAMBDA = 5;
+
+/** A category needs at least this many dated protocols before the odds fit trusts its own effect. */
+export const ODDS_EFFECT_MIN_PROTOCOLS = 5;
+
+/** The age steps the odds fit carries: the launch rate jumps at two and three years. */
+export const ODDS_STEP_AGES = [730, 1095];
+
+/** Solve a small dense linear system by Gauss–Jordan with partial pivoting. */
+function solveLinear(A: number[][], b: number[]): number[] {
+  const n = b.length;
+  const M = A.map((row, i) => [...row, b[i]!]);
+  for (let c = 0; c < n; c++) {
+    let piv = c;
+    for (let r = c + 1; r < n; r++) if (Math.abs(M[r]![c]) > Math.abs(M[piv]![c])) piv = r;
+    const tmp = M[c]!;
+    M[c] = M[piv]!;
+    M[piv] = tmp;
+    const d = M[c]![c]!;
+    if (Math.abs(d) < 1e-12) continue;
+    for (let r = 0; r < n; r++) {
+      if (r === c) continue;
+      const f = M[r]![c]! / d;
+      for (let k = c; k <= n; k++) M[r]![k]! -= f * M[c]![k]!;
+    }
+  }
+  return M.map((row, i) => row[n]! / row[i]!);
+}
+
+/** One row of the odds fit's design: intercept, log age, the two age steps, category dummies. */
+function oddsFeatures(age: number, category: string | null, effects: string[]): number[] {
+  return [
+    1,
+    Math.log(age + 1),
+    age >= ODDS_STEP_AGES[0]! ? 1 : 0,
+    age >= ODDS_STEP_AGES[1]! ? 1 : 0,
+    ...effects.map((c) => (category === c ? 1 : 0)),
+  ];
 }
 
 /**
- * Empirical launch odds from the snapshot's dated protocols (a listing date on record, not a
- * CEX, not a versioned pool): how many of them hold a token today, by category x age cohort.
- * Rates shrink in two steps — a cell toward its age-bucket rate (k = 10), a bucket toward the
- * global rate (k = 20) — so a thin cell borrows the market's base rate instead of inheriting an
- * accident. `only` restricts the training pool (the time-split holdout fits on the early half).
+ * Launch odds as a logistic regression on the snapshot's dated protocols (a listing date on
+ * record, not a CEX, not a versioned pool): P(token) is a sigmoid of ln(age + 1), two step
+ * indicators at two and three years, and a per-category effect for categories with
+ * ODDS_EFFECT_MIN_PROTOCOLS dated protocols or more. Fitted by iteratively reweighted least
+ * squares with a ridge penalty of ODDS_LAMBDA on every coefficient but the intercept, from a
+ * fixed start, a fixed iteration cap and a fixed tolerance — the same snapshot always fits the
+ * same coefficients. A thin category carries no dummy and rides the pooled curve; a protocol
+ * with no listing date falls back to the training pool's global rate. `only` restricts the
+ * training pool (the time-split holdout fits on the early half). On that holdout this fit
+ * scores Brier 0.2231 against 0.3259 for the base rate and 0.2879 for the age-bucket table
+ * it replaces; the win is the functional form — a continuous age gradient with the real
+ * jumps at two and three years — not a tuned constant, since every ridge value tried
+ * (1, 2, 5, 20) beat the bucket table.
  */
 export function launchOdds(snapshot: Snapshot, only?: Set<string>): LaunchOdds {
   const dated: { p: SnapshotProtocol; age: number; launched: number }[] = [];
@@ -481,39 +515,64 @@ export function launchOdds(snapshot: Snapshot, only?: Set<string>): LaunchOdds {
     dated.push({ p, age, launched: isPreToken(p) ? 0 : 1 });
   }
   const global = dated.length === 0 ? 0 : dated.reduce((s, d) => s + d.launched, 0) / dated.length;
-  const bucketSum = [0, 0, 0, 0];
-  const bucketN = [0, 0, 0, 0];
-  const cells = new Map<string, { sum: number; n: number }>();
+  const counts = new Map<string, number>();
   for (const d of dated) {
-    const b = oddsBucket(d.age);
-    bucketSum[b]! += d.launched;
-    bucketN[b]! += 1;
-    if (d.p.category !== null) {
-      const key = `${d.p.category}|${b}`;
-      const cell = cells.get(key) ?? { sum: 0, n: 0 };
-      cell.sum += d.launched;
-      cell.n += 1;
-      cells.set(key, cell);
-    }
+    if (d.p.category === null) continue;
+    counts.set(d.p.category, (counts.get(d.p.category) ?? 0) + 1);
   }
-  const bucketRate = (b: number): number => (bucketSum[b]! + 20 * global) / (bucketN[b]! + 20);
+  const effects = [...counts.keys()].filter((c) => (counts.get(c) ?? 0) >= ODDS_EFFECT_MIN_PROTOCOLS);
+  const k = 4 + effects.length;
+  const rows = dated.map((d) => oddsFeatures(d.age, d.p.category, effects));
+  const y = dated.map((d) => d.launched);
+  const beta = new Array<number>(k).fill(0);
+  beta[0] = global > 0 && global < 1 ? Math.log(global / (1 - global)) : 0;
+  for (let iter = 0; iter < 100; iter++) {
+    const XtX: number[][] = Array.from({ length: k }, () => new Array<number>(k).fill(0));
+    const Xtz: number[] = new Array<number>(k).fill(0);
+    for (let i = 0; i < rows.length; i++) {
+      const eta = rows[i]!.reduce((s, v, j) => s + v * beta[j]!, 0);
+      const mu = 1 / (1 + Math.exp(-Math.max(-30, Math.min(30, eta))));
+      const w = Math.max(mu * (1 - mu), 1e-6);
+      const z = eta + (y[i]! - mu) / w;
+      for (let a = 0; a < k; a++) {
+        Xtz[a]! += w * rows[i]![a]! * z;
+        for (let b = 0; b < k; b++) XtX[a]![b]! += w * rows[i]![a]! * rows[i]![b]!;
+      }
+    }
+    for (let a = 1; a < k; a++) XtX[a]![a]! += ODDS_LAMBDA;
+    const next = solveLinear(XtX, Xtz);
+    const step = Math.max(...next.map((v, j) => Math.abs(v - beta[j]!)));
+    for (let j = 0; j < k; j++) beta[j] = next[j]!;
+    if (step < 1e-8) break;
+  }
+  const predict = (age: number, category: string | null): number => {
+    const row = oddsFeatures(age, category, effects);
+    const eta = row.reduce((s, v, j) => s + v * beta[j]!, 0);
+    return 1 / (1 + Math.exp(-Math.max(-30, Math.min(30, eta))));
+  };
   const forProtocol = (p: SnapshotProtocol): number => {
     const age = ageDays(snapshot.as_of, p.listed_at);
     if (age === null) return global;
-    const b = oddsBucket(age);
-    if (p.category === null) return bucketRate(b);
-    const cell = cells.get(`${p.category}|${b}`);
-    return ((cell?.sum ?? 0) + 10 * bucketRate(b)) / ((cell?.n ?? 0) + 10);
+    return predict(age, p.category);
   };
-  const buckets = [0, 1, 2, 3].map((b) => ({ n: bucketN[b]!, rate: bucketRate(b) }));
-  return { global, cohorts: dated.length, forProtocol, buckets };
+  return {
+    global,
+    cohorts: dated.length,
+    intercept: beta[0]!,
+    age_coef: beta[1]!,
+    step_2y: beta[2]!,
+    step_3y: beta[3]!,
+    category_effects: effects.length,
+    odds_at_ages: ODDS_AT_AGES.map((days) => ({ days, odds: predict(days, null) })),
+    forProtocol,
+  };
 }
 
 /**
  * The model's self-validation, computed on the sealed snapshot every run. Pricing: leave-one-out
  * over the live peers — refit the curve without each peer and compare the median absolute log
  * error (as a multiple) against the same exercise for radar-2's category-median method. Launch
- * odds: a time split — fit the cohorts on the earlier half of the dated protocols, score Brier
+ * odds: a time split — fit the logistic odds on the earlier half of the dated protocols, score Brier
  * on the later half, against always predicting the training base rate.
  */
 export function validateModel(snapshot: Snapshot, model: ModelConstants = MODEL): ValidationSummary {
@@ -762,32 +821,37 @@ interface PlanContext {
   hold: number;
 }
 
-/** One family's two signature actions and its weekly qualifying action, in a farmer's words. */
-const PLAYBOOKS: Record<FarmFamily, { core: (x: PlanContext) => string; second: (x: PlanContext) => string; weekly: string }> = {
+/** One family's two signature actions, its weekly qualifying action and its exit, in a farmer's words. */
+const PLAYBOOKS: Record<FarmFamily, { core: (x: PlanContext) => string; second: (x: PlanContext) => string; weekly: string; exit: (x: PlanContext) => string }> = {
   dex: {
     core: (x) => `Provide $${x.capital} of liquidity to ${x.name}'s deepest pool on ${x.chain} — a stable or blue-chip pair, in range if the pool is concentrated — and keep the LP position open.`,
     second: (x) => `Route your own swaps through ${x.name} rather than an aggregator, so the wallet shows both sides of the venue: liquidity and volume.`,
     weekly: 'one swap of $25 or more through the venue',
+    exit: (x) => `Remove the liquidity position through ${x.name} itself, collect any unclaimed trading fees first, and check no LP tokens are left in the wallet. Claim only from the link ${x.name} itself publishes.`,
   },
   lending: {
     core: (x) => `Supply $${x.capital} of USDC to ${x.name} on ${x.chain} in its main market and leave the supply position untouched.`,
     second: (x) => `Borrow no more than 40% against the supply, re-supply the borrowed asset once, then repay — one clean loop that registers as a real borrower, not leverage.`,
     weekly: 'one supply top-up or partial repay of $10 or more',
+    exit: (x) => `Repay any borrow in full first — a supply position cannot be withdrawn cleanly while a loan stands against it — then withdraw the supply and check the wallet balance. Claim only from the link ${x.name} itself publishes.`,
   },
   cdp: {
     core: (x) => `Deposit $${x.capital} of collateral into ${x.name} on ${x.chain} and mint its stablecoin at under half the maximum the vault allows, so the position survives a bad week.`,
     second: (x) => `Put the minted stablecoin to work in ${x.name}'s own stability pool or its main liquidity pool instead of selling it, and hold both sides.`,
     weekly: 'one mint, repay or pool deposit of $10 or more',
+    exit: (x) => `Repay the minted stablecoin and close the vault before you touch the collateral, keeping the position above its liquidation line until the very last step. Claim only from the link ${x.name} itself publishes.`,
   },
   staking: {
     core: (x) => `Stake $${x.capital} of ${x.chain}'s staking asset through ${x.name} and keep the liquid receipt token in the same wallet.`,
     second: (x) => `Use the receipt token once — supply it to a lending market or pair it in a pool the protocol itself lists — without leverage, so the stake counts twice and risks once.`,
     weekly: 'one small top-up stake of $10 or more',
+    exit: (x) => `Start the unstake and respect the unbonding wait ${x.name} publishes — the receipt token stops earning the moment you queue the exit, so do not queue it twice. Claim only from the link ${x.name} itself publishes.`,
   },
   restaking: {
     core: (x) => `Deposit $${x.capital} of a supported staking or BTC asset into ${x.name} on ${x.chain} and keep the restaking receipt in the wallet.`,
     second: (x) => `If ${x.name} lets depositors pick operators or services, make one deliberate selection and leave it; if not, hold the receipt untouched — restaking points pay for duration, not clicks.`,
     weekly: 'one balance check only; add $10 or more once a month',
+    exit: (x) => `Queue the withdrawal through ${x.name} and wait out its published queue; restaked assets come back in the order they were queued, not on demand. Claim only from the link ${x.name} itself publishes.`,
   },
   bridge: {
     core: (x) =>
@@ -796,71 +860,85 @@ const PLAYBOOKS: Record<FarmFamily, { core: (x: PlanContext) => string; second: 
         : `Bridge $${x.capital} of funds onto ${x.chain} through ${x.name} and put them to work in one app there the same day; a bridge position that never lands anywhere earns nothing.`,
     second: (x) => `Bridge a second, smaller amount back on a different day, so the wallet has real two-way route history rather than a single hop.`,
     weekly: 'one bridge transfer of $25 or more, alternating directions',
+    exit: (x) => `Confirm the bridged funds actually arrived and are usable on the far side before you call the farm done; a bridge that never lands is a donation. Claim only from the link ${x.name} itself publishes.`,
   },
   derivatives: {
     core: (x) => `Deposit $${x.capital} of USDC as margin on ${x.name} and open one small hedged trade — long the asset spot, short the same size on the perp — so the account is active without betting on direction.`,
     second: (x) => `Keep the hedge on and adjust it when it drifts: add margin before you add size, and never let the position sit one bad candle from liquidation.`,
     weekly: 'one hedge adjustment or new small trade',
+    exit: (x) => `Close the hedge first — buy back the short, sell the spot — and only then withdraw the margin, so no open position is left to liquidate after you leave. Claim only from the link ${x.name} itself publishes.`,
   },
   curator: {
     core: (x) => `Deposit $${x.capital} of USDC into a ${x.name} vault on ${x.chain} — the vault with the deepest book, not the highest advertised yield — and keep the shares.`,
     second: (x) => `Split a second $${Math.max(25, Math.floor(x.capital / 2))} across another ${x.name} vault with a different risk profile, so the wallet follows the curator, not one pool.`,
     weekly: 'one deposit or rebalance of $10 or more',
+    exit: (x) => `Redeem the vault shares through ${x.name} and check whether the vault settles instantly or on its published withdrawal window before you count the money home. Claim only from the link ${x.name} itself publishes.`,
   },
   yield: {
     core: (x) => `Deposit $${x.capital} of USDC into ${x.name}'s main vault on ${x.chain} and keep the vault shares in the wallet.`,
     second: (x) => `Compound whatever the vault pays back into the same position instead of withdrawing it — a growing balance reads as conviction, not tourism.`,
     weekly: 'one compound or top-up of $10 or more',
+    exit: (x) => `Withdraw from the vault through ${x.name} itself and confirm the vault shares are gone from the wallet; leave a dust balance only if the vault charges to close it fully. Claim only from the link ${x.name} itself publishes.`,
   },
   basis: {
     core: (x) => `Deposit $${x.capital} of USDC into ${x.name}'s basis strategy on ${x.chain} and hold the position token it issues.`,
     second: (x) => `Leave the position untouched through at least one full funding cycle; basis strategies reward the wallets still there when the cycle closes.`,
     weekly: 'one balance check only; add $10 or more once a month',
+    exit: (x) => `Wait for the current funding cycle to close, then redeem the position token through ${x.name} — exiting mid-cycle leaves the cycle's yield on the table. Claim only from the link ${x.name} itself publishes.`,
   },
   rwa: {
     core: (x) => `Complete ${x.name}'s onboarding or KYC if it asks, then mint $${x.capital} of its yield asset on ${x.chain} and hold it in the wallet.`,
     second: (x) => `Read the redemption terms before you need them — notice periods and minimums — and diarise the first date the position can actually be exited.`,
     weekly: 'no weekly action; check the position and its reports once a month',
+    exit: (x) => `Give the redemption notice ${x.name} publishes, wait it out, then redeem the yield asset — and check the redemption is settled in the wallet before you close the books. Claim only from the link ${x.name} itself publishes.`,
   },
   chain: {
     core: (x) => `Bridge $${x.capital} of funds onto ${x.name} itself and make the wallet a resident: first transactions, a native swap and a small lend in its own apps.`,
     second: (x) => `Use two of ${x.name}'s native protocols — a DEX and a lending market — so the chain sees a user, not a pass-through.`,
     weekly: 'two or three ordinary transactions on the chain',
+    exit: (x) => `Leave a small balance on ${x.name} for future gas, then bridge the rest home through a route the chain itself lists; a wallet that leaves cleanly can come back.`,
   },
   launchpad: {
     core: (x) => `Register the wallet with ${x.name}, complete whatever eligibility it publishes, and commit up to $${x.capital} to one launch you would hold anyway.`,
     second: (x) => `Follow the launch's own allocation and claim rules to the letter, and claim only from the page ${x.name} itself links.`,
     weekly: 'check for new launches once a week; commit only when one fits',
+    exit: (x) => `Claim the allocation only from the page ${x.name} itself links, then check the tokens arrived before you move them anywhere — never claim from a link in a chat or an email.`,
   },
   prediction: {
     core: (x) => `Fund $${x.capital} on ${x.name} and take small positions in its most liquid markets — size for activity, not for a view you do not hold.`,
     second: (x) => `Keep a written note of each position and why; a wallet that trades like a person outlasts one that sprays.`,
     weekly: 'one or two market positions of $10–$25',
+    exit: (x) => `Settle every open position on ${x.name} first, then withdraw the balance — an open market left behind settles without you, and usually against you.`,
   },
   insurance: {
     core: (x) => `Buy $${x.capital} of cover from ${x.name} against a position you genuinely hold on ${x.chain}, for the longest term it offers.`,
     second: (x) => `If ${x.name} takes stakers, place a small stake in its underwriting pool as well, so the wallet is both customer and capital.`,
     weekly: 'no weekly action; renew the cover before it lapses',
+    exit: (x) => `Let the cover run to its term or cancel it through ${x.name} itself, then withdraw any staked underwriting capital — and keep the policy documents until the term ends. Claim only from the link ${x.name} itself publishes.`,
   },
   payments: {
     core: (x) => `Open the ${x.name} account, finish its KYC, and load $${x.capital} so the account is live and funded.`,
     second: (x) => `Route real, routine spending through it — the activity a payments protocol rewards is use, not deposits that sit still.`,
     weekly: 'ordinary spending through the account, as it comes',
+    exit: (x) => `Spend the balance down or withdraw it to your own bank or card through ${x.name} itself, then close the account only after the last transaction clears.`,
   },
   privacy: {
     core: (x) => `Deposit $${x.capital} into ${x.name} on ${x.chain} using its own interface, and keep the deposit note somewhere only you can read.`,
     second: (x) => `Make one shielded transfer to your own second wallet after a delay of days, not minutes — privacy tools reward patience.`,
     weekly: 'at most one shielded action a week; quiet is the point',
+    exit: (x) => `Withdraw to your own second wallet in a separate, delayed transaction — never straight after the deposit — and keep the deposit note until the funds are home.`,
   },
   governance: {
     core: (x) => `Take the position ${x.name} rewards — deposit $${x.capital} through its product on ${x.chain} — and register the wallet wherever it records participation.`,
     second: (x) => `Read each proposal before voting on it; a small wallet that votes with reasons is the user these programs say they want.`,
     weekly: 'vote in every open epoch or proposal',
+    exit: (x) => `Withdraw the position only after the epoch or proposal you voted in has closed, so the vote still counts — a wallet that leaves mid-epoch votes for nothing.`,
   },
   generic: {
     core: (x) => `Deposit $${x.capital} of USDC into ${x.name} on ${x.chain} through its own app and keep the position open.`,
     second: (x) => `Use one more of ${x.name}'s features — a second pool, a borrow, a stake — so the wallet shows depth, not a single deposit.`,
     weekly: 'one qualifying action of $10 or more',
+    exit: (x) => `Withdraw the position through ${x.name} itself and check the wallet balance. Claim only from the link ${x.name} itself publishes.`,
   },
 };
 
@@ -895,18 +973,7 @@ function spotlightText(p: SnapshotProtocol, age: number | null): string {
  * never from a hand-written list of names. Every row opens with a step written from the
  * protocol's own figures — its TVL, chains, seven-day move and age — and the wallet-hygiene
  * advice rides at the end of that same step, so no row on the board opens generically.
- * The middle of the plan is placed from the record too: the funding step names the protocol's
- * second chain when it has one — and says plainly when it runs on one chain alone — and the
- * hold step quotes the protocol's own age, because the hold window is sized from that age.
  */
-/** How long a protocol has run, in words a plan can quote: days under a year, years beyond two. */
-function agePhraseFor(age: number | null): string {
-  if (age === null) return 'an unrecorded span';
-  if (age >= 730) return `${(age / 365).toFixed(1)} years`;
-  if (age >= 365) return 'over a year';
-  return `${age} days`;
-}
-
 export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
   const chain = chainOf(p);
   const x: PlanContext = {
@@ -925,10 +992,7 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
       time: '5 minutes',
     },
     {
-      text:
-        x.secondChain !== null
-          ? `Fund the wallet on ${x.chain} before you start: bridge or buy in enough for the position plus a gas buffer, and do one tiny test transaction first. ${p.name} also runs on ${x.secondChain}, so if ${x.chain} gas spikes, the same plan works from that side instead.`
-          : `Fund the wallet on ${x.chain} before you start: bridge or buy in enough for the position plus a gas buffer, and do one tiny test transaction first. ${p.name} runs on ${x.chain} alone, so there is no cheaper side door — the wallet has to be funded on that chain.`,
+      text: `Fund the wallet on ${x.chain} before you start: bridge or buy in enough for the position plus a gas buffer, and do one tiny test transaction first.`,
       cost: `about $${x.gas} of gas on ${x.chain}`,
       time: '10 minutes',
     },
@@ -948,12 +1012,12 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
       time: '10 minutes a week',
     },
     {
-      text: `Hold the position for at least ${x.hold} days so the activity is counted in more than one snapshot. ${p.name} has run ${agePhraseFor(age)} with no token on record, and the window is sized from that age — younger protocols get the longer window because their books are thinner.`,
+      text: `Hold the position for at least ${x.hold} days so the activity is counted in more than one snapshot; younger protocols get the longer window because their books are thinner.`,
       cost: `the $${x.capital} stays in the position`,
       time: `${x.hold} days`,
     },
     {
-      text: `Before you withdraw, open ${x.name}'s own points or rewards page and claim only from the link it publishes; then log the wallet, dates and transactions so the position can be repeated or unwound.`,
+      text: `${book.exit(x)} Log the wallet, dates and transactions so the position can be repeated or unwound.`,
       cost: 'no fee to check, and never pay to claim',
       time: '10 minutes',
     },
@@ -1012,28 +1076,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
   const early = board.filter((r) => !snapshot.watchlist.includes(r.slug)).length;
   const fit = fitComps(snapshot, undefined, model);
   const odds = launchOdds(snapshot);
-  const multiples = peerMultiples(snapshot, model);
   const liveTotal = snapshot.protocols.filter((p) => !isPreToken(p)).length;
-  const rankedByCategory = new Map<string, number>();
-  for (const r of board) {
-    const key = r.category ?? 'Other';
-    rankedByCategory.set(key, (rankedByCategory.get(key) ?? 0) + 1);
-  }
-  const statByCategory = new Map(multiples.categoryStats.map((s) => [s.category, s]));
-  const categories: CategoryEvidence[] = [...new Set([...statByCategory.keys(), ...rankedByCategory.keys()])]
-    .map((category) => {
-      const stat = statByCategory.get(category);
-      return {
-        category,
-        peers: stat?.peers ?? 0,
-        median_multiple: round4(stat?.median_multiple ?? 0),
-        curve_shift_x: round4(Math.exp(fit.shiftFor(category))),
-        ranked: rankedByCategory.get(category) ?? 0,
-      };
-    })
-    .filter((c) => c.peers > 0 || c.ranked > 0)
-    .sort((x, y) => y.ranked - x.ranked || y.peers - x.peers || (x.category < y.category ? -1 : 1))
-    .slice(0, 14);
   const radar: RadarData = {
     as_of: snapshot.as_of,
     source: snapshot.source,
@@ -1044,7 +1087,13 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     odds: {
       global_rate: round4(odds.global),
       cohorts: odds.cohorts,
-      buckets: odds.buckets.map((b) => ({ n: b.n, rate: round4(b.rate) })),
+      intercept: round4(odds.intercept),
+      age_coef: round4(odds.age_coef),
+      step_2y: round4(odds.step_2y),
+      step_3y: round4(odds.step_3y),
+      category_effects: odds.category_effects,
+      lambda: ODDS_LAMBDA,
+      odds_at_ages: odds.odds_at_ages.map((o) => ({ days: o.days, odds: round4(o.odds) })),
     },
     validation: validateModel(snapshot, model),
     coverage: {
@@ -1053,7 +1102,6 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
       live: liveTotal,
       excluded: snapshot.protocols.length - board.length - liveTotal,
     },
-    categories,
     watchlist_size: snapshot.watchlist.length,
     board_size: board.length,
     early_size: early,

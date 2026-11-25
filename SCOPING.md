@@ -44,7 +44,7 @@ farm plans with concrete actions, costs and durations; a page that sorts, filter
 and explains itself; and a finished, deliberate look. Text addressed to the judge
 inside the entry is allowed and is read as part of the entry.
 
-## The model in this entry (radar-5)
+## The model in this entry (radar-7)
 
 Two multiplicative layers over the snapshot's own numbers, nothing hardcoded:
 
@@ -52,35 +52,31 @@ Two multiplicative layers over the snapshot's own numbers, nothing hardcoded:
   market cap and a TVL, a least-squares fit of ln(market cap) on ln(TVL), with a
   per-category intercept shift (median residual, shrunk toward zero for thin
   categories). A pre-token protocol's curve value is the market cap the curve
-  predicts at its TVL.
-- An empirical launch-odds layer. Of the 532 protocols with a listing date, the
-  share that actually has a token, tabulated by category and age cohort and shrunk
-  toward the global rate of 0.4925. Board value is curve value multiplied by these
-  odds — an expected launch value, not a bare multiple.
+  predicts at its TVL. Re-tested for this version against robust, joint-dummy,
+  Theil–Sen and size-floored fits; the least-squares fit stayed the best
+  (leave-one-out median error 3.18x, the alternatives 3.25x–3.54x).
+- A fitted launch-odds layer. Of the 532 protocols with a listing date, a
+  logistic regression: P(token) is a sigmoid of ln(age in days + 1), step
+  indicators at two and three years of age, and a per-category effect for
+  categories with five or more dated protocols (ridge lambda 5). It replaces
+  the age-bucket table radar-4 used: on the same time-split holdout it scores
+  Brier 0.2231 against 0.3259 for the base rate and 0.2879 for the buckets.
+  Board value is curve value multiplied by these odds — an expected launch
+  value, not a bare multiple.
 
 The model validates itself at runtime and prints the evidence on the dashboard's
 model panel: leave-one-out median pricing error 3.18x for the curve against 4.99x
-for category medians, and a time-split Brier score of 0.288 for the odds against
+for category medians, and a time-split Brier score of 0.223 for the odds against
 0.326 for the base rate. Coverage is complete by construction: all 289 rankable
 pre-token protocols are scored, and the page accounts for the whole snapshot —
 289 ranked + 416 already live + 53 excluded = 758.
 
 Farm plans are generated per row from category playbooks: seven steps each, the
 first step of every row written from that protocol's own record (its TVL,
-chains, seven-day move and age), costs and durations stated throughout. The
-funding step also reads the record — it names the protocol's second chain as
-the alternate route when it has one, and says plainly when the protocol runs
-on one chain alone — and the hold step quotes the protocol's own age, because
-the hold window is sized from that age.
-
-The model panel prints the evidence under the two fitted layers, all computed
-at runtime from the snapshot: the launch-odds table (dated protocols and the
-shrunk token rate for each of the four age cohorts) and the category evidence
-table (each category's live peers, their median multiple, the intercept shift
-the curve grants it, and how many board rows it prices). Four screenshots are
-handed in: the board, a detail drawer, the model view, and a filtered view —
-the page's filters are deep-linkable in the URL hash, so the filtered shot is
-the page exactly as a reader following that link sees it.
+chains, seven-day move and age), costs and durations stated throughout, and
+the exit step now written from the protocol's playbook family — unbonding
+waits for staking, repay-before-withdraw for lending and CDPs, confirm
+arrival for bridges — so no step in any plan is generic.
 
 ## Transcript discipline (learned the hard way)
 
@@ -108,11 +104,20 @@ never copied between version directories without being re-authored where it matt
   with a step written from that protocol's own record, where v4 wrote that
   step only for the top 20 and gave the other 269 rows a generic wallet step.
   Dev rate 0.914 — twelve wins, no draws, no losses; the best version so far.
-- v6 (this version): pricing still unchanged, board values and order identical
-  to v5. The model panel gains the two runtime evidence tables (launch odds by
-  age cohort; category evidence for the curve), a fourth screenshot shows a
+- v6: pricing still unchanged, board values and order identical to v5. The
+  model panel gains the two runtime evidence tables (launch odds by age
+  cohort; category evidence for the curve), a fourth screenshot shows a
   filtered view, and farm plans' funding and hold steps are placed from each
-  protocol's own chains and age.
+  protocol's own chains and age. Dev rate 0.907 — twelve wins, no draws, no
+  losses; the gap to v5 is within the rating's noise (intervals overlap
+  almost entirely), so v6 is not the base for the next version.
+- v7 (this version): built on v5, not v6. The launch-odds layer becomes a
+  logistic regression (time-split Brier 0.2231, from 0.2879 for the bucket
+  table); the curve is unchanged after re-testing the alternatives; every
+  farm plan's exit step is written from its playbook family; the model panel
+  states the fitted odds coefficients and the pooled odds at four ages, and
+  the detail drawer shows what a 10-point rise in launch odds would do to
+  the row's implied value.
 
 Entries close 2026-12-14 10:00 UTC. Versions are built on the previous version's
 rating evidence and submitted as they pass the local checks; the last version
