@@ -152,6 +152,11 @@ tbody tr[data-selected="true"]{background:var(--accent-dim)}
   overflow-wrap:anywhere; background:var(--canvas);
   border:1px solid var(--border-soft); padding:var(--step-3) var(--step-4);
 }
+.evidence{font-size:12.5px}
+.evidence th.num,.evidence td.num{text-align:right}
+.evidence tbody tr{cursor:default}
+.evidence tbody tr:hover{background:none}
+.evidence td:first-child{font-weight:600}
 .empty{padding:var(--step-7) var(--step-5); text-align:center; display:grid; gap:var(--step-3); justify-items:center}
 .empty p{color:var(--muted)}
 .button{

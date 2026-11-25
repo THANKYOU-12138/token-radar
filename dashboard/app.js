@@ -1,4 +1,4 @@
-// Token Radar (radar-4): a dark console for the pre-token board. It reads window.RADAR
+// Token Radar (radar-5): a dark console for the pre-token board. It reads window.RADAR
 // (written beside dashboard/ by main.ts from the same board that becomes board.json) and renders the
 // ranked board, a filterable table and a per-protocol detail drawer. The page derives nothing of its
 // own: every implied value, every multiplier and every farm step it shows is the board's own, carried
@@ -246,6 +246,19 @@
     );
   }
 
+  function evidenceTable(head, rows) {
+    return el('table', { class: 'evidence' },
+      el('thead', null, el('tr', null, head.map(function (h, i) {
+        return el('th', i === 0 ? { text: h } : { class: 'num', text: h });
+      }))),
+      el('tbody', null, rows.map(function (cells) {
+        return el('tr', null, cells.map(function (c, i) {
+          return el('td', i === 0 ? { text: c } : { class: 'num', text: c });
+        }));
+      }))
+    );
+  }
+
   function modelPanel() {
     var m = DATA.model;
     var f = DATA.fit;
@@ -272,6 +285,15 @@
         el('br'),
         'check    = leave-one-out median pricing error: curve ' + v.curve_loo_error_x + 'x vs category medians ' + v.median_loo_error_x + 'x; launch-odds Brier ' + v.odds_brier + ' vs base rate ' + v.odds_base_brier + ' on a time-split holdout of ' + v.odds_test_n + ' protocols'
       ),
+      el('p', { class: 'sub', text: 'The odds layer, cohort by cohort: the shrunk token rate each age band shows across the dated protocols of the snapshot, and how many protocols stand behind each rate. Young cohorts launch less often than old ones — that gradient, not a guess, is what discounts the curve value of a young protocol.' }),
+      evidenceTable(['Age cohort', 'Dated protocols', 'Token rate'], ['Under 1 year', '1–2 years', '2–3 years', 'Over 3 years'].map(function (label, i) {
+        var b = DATA.odds.buckets[i];
+        return [label, String(b.n), (b.rate * 100).toFixed(1) + '%'];
+      })),
+      el('p', { class: 'sub', text: 'The price layer, category by category: the live peers behind each part of the curve, the multiple they trade at, the intercept shift the fit grants the category (x1 is no shift — the category rides the bare curve), and how many board rows that part of the curve prices. A category with no shift is not ignored; it is priced by the pooled curve because its own peers are too few to trust.' }),
+      evidenceTable(['Category', 'Live peers', 'Median multiple', 'Curve shift', 'Board rows'], DATA.categories.map(function (ct) {
+        return [ct.category, String(ct.peers), fmtMult(ct.median_multiple), fmtMult(ct.curve_shift_x), String(ct.ranked)];
+      })),
       el('p', { class: 'sub', text: 'The board ranks every rankable pre-token protocol in the snapshot. Whole-snapshot accounting: ' + c.ranked + ' ranked + ' + c.live + ' already holding a token (set aside in the Live token view; the priced ones are the curve\'s peer set) + ' + c.excluded + ' excluded with reason (centralised exchanges and versioned pools of other protocols) = ' + c.total + ' protocols.' })
     );
   }

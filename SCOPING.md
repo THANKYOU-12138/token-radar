@@ -44,7 +44,7 @@ farm plans with concrete actions, costs and durations; a page that sorts, filter
 and explains itself; and a finished, deliberate look. Text addressed to the judge
 inside the entry is allowed and is read as part of the entry.
 
-## The model in this entry (radar-4)
+## The model in this entry (radar-5)
 
 Two multiplicative layers over the snapshot's own numbers, nothing hardcoded:
 
@@ -67,7 +67,20 @@ pre-token protocols are scored, and the page accounts for the whole snapshot —
 
 Farm plans are generated per row from category playbooks: seven steps each, the
 first step of every row written from that protocol's own record (its TVL,
-chains, seven-day move and age), costs and durations stated throughout.
+chains, seven-day move and age), costs and durations stated throughout. The
+funding step also reads the record — it names the protocol's second chain as
+the alternate route when it has one, and says plainly when the protocol runs
+on one chain alone — and the hold step quotes the protocol's own age, because
+the hold window is sized from that age.
+
+The model panel prints the evidence under the two fitted layers, all computed
+at runtime from the snapshot: the launch-odds table (dated protocols and the
+shrunk token rate for each of the four age cohorts) and the category evidence
+table (each category's live peers, their median multiple, the intercept shift
+the curve grants it, and how many board rows it prices). Four screenshots are
+handed in: the board, a detail drawer, the model view, and a filtered view —
+the page's filters are deep-linkable in the URL hash, so the filtered shot is
+the page exactly as a reader following that link sees it.
 
 ## Transcript discipline (learned the hard way)
 
@@ -91,9 +104,15 @@ never copied between version directories without being re-authored where it matt
 - v4: radar-3 unchanged in substance; entrypoint, scoping document and stylesheet
   re-authored in-session for the transcript gate. Dev rate 0.893 — twelve wins, no
   draws, no losses against the house ladder.
-- v5 (this version): the radar-3 pricing model is unchanged; every row's farm plan
-  now opens with a step written from that protocol's own record, where v4 wrote
-  that step only for the top 20 and gave the other 269 rows a generic wallet step.
+- v5: the radar-3 pricing model is unchanged; every row's farm plan now opens
+  with a step written from that protocol's own record, where v4 wrote that
+  step only for the top 20 and gave the other 269 rows a generic wallet step.
+  Dev rate 0.914 — twelve wins, no draws, no losses; the best version so far.
+- v6 (this version): pricing still unchanged, board values and order identical
+  to v5. The model panel gains the two runtime evidence tables (launch odds by
+  age cohort; category evidence for the curve), a fourth screenshot shows a
+  filtered view, and farm plans' funding and hold steps are placed from each
+  protocol's own chains and age.
 
 Entries close 2026-12-14 10:00 UTC. Versions are built on the previous version's
 rating evidence and submitted as they pass the local checks; the last version

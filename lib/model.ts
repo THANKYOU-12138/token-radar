@@ -1,7 +1,11 @@
-// The token radar's model (radar-4): one snapshot of the protocol universe in, one ranked board out.
-// radar-4 keeps radar-3's pricing exactly as it was — the same fitted curve, the same launch
-// odds, the same multipliers — and changes only the farm plans: every row now opens with a step
-// written from that protocol's own record, where radar-3 wrote that step only for the top 20.
+// The token radar's model (radar-5): one snapshot of the protocol universe in, one ranked board out.
+// radar-5 keeps radar-4's pricing exactly as it was — the same fitted curve, the same launch
+// odds, the same multipliers, the same board values in the same order — and changes what the
+// entry shows and how its plans read. The model panel now prints the evidence under the two
+// fitted layers (the launch rate of each age cohort, and each category's live peers, their
+// median multiple and the intercept shift the curve grants it), and a farm plan's funding and
+// hold steps are placed from the protocol's own record — its chains and its age — the way
+// radar-4 already wrote every plan's opening step from that record.
 //
 // The board ranks EVERY rankable pre-token protocol in the snapshot (pre-token: no market cap, no
 // CoinGecko id, no symbol on record; rankable: not a CEX, not a versioned pool of another protocol).
@@ -104,7 +108,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-4';
+export const MODEL_VERSION = 'radar-5';
 
 /** Age cohorts for the launch-odds layer, in days: under a year, one to two, two to three, older. */
 export const ODDS_AGE_BUCKETS = [365, 730, 1095];
@@ -209,6 +213,21 @@ export interface OddsSummary {
   global_rate: number;
   /** How many dated protocols the cohort rates were computed from. */
   cohorts: number;
+  /** The four age cohorts, youngest first: dated protocols in each and the shrunk token rate. */
+  buckets: { n: number; rate: number }[];
+}
+
+/** One category's evidence row for the model panel: its live peers, their pricing, its curve shift, and how many board rows it carries. */
+export interface CategoryEvidence {
+  category: string;
+  /** Live peers in this category that carry both a market cap and a TVL. */
+  peers: number;
+  /** The median mcap/TVL of those peers, winsorised the way the model winsorises. */
+  median_multiple: number;
+  /** The curve's intercept for this category as a multiple of the bare curve (1 when it earned no shift). */
+  curve_shift_x: number;
+  /** Board rows ranked in this category. */
+  ranked: number;
 }
 
 /** The model's runtime self-validation on the sealed snapshot (see validateModel). */
@@ -244,6 +263,7 @@ export interface RadarData {
   odds: OddsSummary;
   validation: ValidationSummary;
   coverage: CoverageSummary;
+  categories: CategoryEvidence[];
   watchlist_size: number;
   board_size: number;
   early_size: number;
@@ -292,6 +312,8 @@ export interface PeerMultiples {
   peers: number;
   /** The shrunk, clamped multiple for one category; the global when the category has no peers. */
   forCategory: (category: string | null) => number;
+  /** Each peer category's own evidence: how many live peers it has and their median multiple. */
+  categoryStats: { category: string; peers: number; median_multiple: number }[];
 }
 
 /**
@@ -329,7 +351,10 @@ export function peerMultiples(snapshot: Snapshot, model: ModelConstants = MODEL)
     cache.set(category, mult);
     return mult;
   };
-  return { global, peers: peers.length, forCategory };
+  const categoryStats = [...byCategory.entries()]
+    .map(([category, list]) => ({ category, peers: list.length, median_multiple: median(list) ?? global }))
+    .sort((x, y) => y.peers - x.peers || (x.category < y.category ? -1 : 1));
+  return { global, peers: peers.length, forCategory, categoryStats };
 }
 
 /** The snapshot's live peers: a token on record, a market cap and a TVL, and not a CEX. */
@@ -362,6 +387,8 @@ export interface CompsFit {
   peers: number;
   impliedFor: (p: SnapshotProtocol) => number;
   multFor: (p: SnapshotProtocol) => number;
+  /** The shrunk per-category intercept shift in log space; 0 when the category earned none. */
+  shiftFor: (category: string | null) => number;
 }
 
 /**
@@ -380,6 +407,7 @@ export function fitComps(snapshot: Snapshot, excludeSlug?: string, model: ModelC
       peers: peers.length,
       impliedFor: (p) => p.tvl_usd * model.base_multiple,
       multFor: () => model.base_multiple,
+      shiftFor: () => 0,
     };
   }
   const xs = peers.map((p) => Math.log(p.tvl_usd));
@@ -406,7 +434,15 @@ export function fitComps(snapshot: Snapshot, excludeSlug?: string, model: ModelC
   }
   const impliedFor = (p: SnapshotProtocol): number =>
     p.tvl_usd > 0 ? Math.exp(a + b * Math.log(p.tvl_usd) + (p.category === null ? 0 : shifts.get(p.category) ?? 0)) : 0;
-  return { a, b, r2: ssTot > 0 ? 1 - ssRes / ssTot : 0, peers: peers.length, impliedFor, multFor: (p) => (p.tvl_usd > 0 ? impliedFor(p) / p.tvl_usd : 0) };
+  return {
+    a,
+    b,
+    r2: ssTot > 0 ? 1 - ssRes / ssTot : 0,
+    peers: peers.length,
+    impliedFor,
+    multFor: (p) => (p.tvl_usd > 0 ? impliedFor(p) / p.tvl_usd : 0),
+    shiftFor: (category) => (category === null ? 0 : shifts.get(category) ?? 0),
+  };
 }
 
 /** The launch-odds layer: the empirical token rate of a protocol's category x age cohort. */
@@ -416,6 +452,8 @@ export interface LaunchOdds {
   /** How many dated protocols stand behind the cohort rates. */
   cohorts: number;
   forProtocol: (p: SnapshotProtocol) => number;
+  /** The four age cohorts in ODDS_AGE_BUCKETS order: dated protocols in each, and its shrunk rate. */
+  buckets: { n: number; rate: number }[];
 }
 
 /** Which age cohort a day count falls in: 0 youngest .. 3 oldest, per ODDS_AGE_BUCKETS. */
@@ -467,7 +505,8 @@ export function launchOdds(snapshot: Snapshot, only?: Set<string>): LaunchOdds {
     const cell = cells.get(`${p.category}|${b}`);
     return ((cell?.sum ?? 0) + 10 * bucketRate(b)) / ((cell?.n ?? 0) + 10);
   };
-  return { global, cohorts: dated.length, forProtocol };
+  const buckets = [0, 1, 2, 3].map((b) => ({ n: bucketN[b]!, rate: bucketRate(b) }));
+  return { global, cohorts: dated.length, forProtocol, buckets };
 }
 
 /**
@@ -856,7 +895,18 @@ function spotlightText(p: SnapshotProtocol, age: number | null): string {
  * never from a hand-written list of names. Every row opens with a step written from the
  * protocol's own figures — its TVL, chains, seven-day move and age — and the wallet-hygiene
  * advice rides at the end of that same step, so no row on the board opens generically.
+ * The middle of the plan is placed from the record too: the funding step names the protocol's
+ * second chain when it has one — and says plainly when it runs on one chain alone — and the
+ * hold step quotes the protocol's own age, because the hold window is sized from that age.
  */
+/** How long a protocol has run, in words a plan can quote: days under a year, years beyond two. */
+function agePhraseFor(age: number | null): string {
+  if (age === null) return 'an unrecorded span';
+  if (age >= 730) return `${(age / 365).toFixed(1)} years`;
+  if (age >= 365) return 'over a year';
+  return `${age} days`;
+}
+
 export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
   const chain = chainOf(p);
   const x: PlanContext = {
@@ -875,7 +925,10 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
       time: '5 minutes',
     },
     {
-      text: `Fund the wallet on ${x.chain} before you start: bridge or buy in enough for the position plus a gas buffer, and do one tiny test transaction first.`,
+      text:
+        x.secondChain !== null
+          ? `Fund the wallet on ${x.chain} before you start: bridge or buy in enough for the position plus a gas buffer, and do one tiny test transaction first. ${p.name} also runs on ${x.secondChain}, so if ${x.chain} gas spikes, the same plan works from that side instead.`
+          : `Fund the wallet on ${x.chain} before you start: bridge or buy in enough for the position plus a gas buffer, and do one tiny test transaction first. ${p.name} runs on ${x.chain} alone, so there is no cheaper side door — the wallet has to be funded on that chain.`,
       cost: `about $${x.gas} of gas on ${x.chain}`,
       time: '10 minutes',
     },
@@ -895,7 +948,7 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
       time: '10 minutes a week',
     },
     {
-      text: `Hold the position for at least ${x.hold} days so the activity is counted in more than one snapshot; younger protocols get the longer window because their books are thinner.`,
+      text: `Hold the position for at least ${x.hold} days so the activity is counted in more than one snapshot. ${p.name} has run ${agePhraseFor(age)} with no token on record, and the window is sized from that age — younger protocols get the longer window because their books are thinner.`,
       cost: `the $${x.capital} stays in the position`,
       time: `${x.hold} days`,
     },
@@ -959,7 +1012,28 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
   const early = board.filter((r) => !snapshot.watchlist.includes(r.slug)).length;
   const fit = fitComps(snapshot, undefined, model);
   const odds = launchOdds(snapshot);
+  const multiples = peerMultiples(snapshot, model);
   const liveTotal = snapshot.protocols.filter((p) => !isPreToken(p)).length;
+  const rankedByCategory = new Map<string, number>();
+  for (const r of board) {
+    const key = r.category ?? 'Other';
+    rankedByCategory.set(key, (rankedByCategory.get(key) ?? 0) + 1);
+  }
+  const statByCategory = new Map(multiples.categoryStats.map((s) => [s.category, s]));
+  const categories: CategoryEvidence[] = [...new Set([...statByCategory.keys(), ...rankedByCategory.keys()])]
+    .map((category) => {
+      const stat = statByCategory.get(category);
+      return {
+        category,
+        peers: stat?.peers ?? 0,
+        median_multiple: round4(stat?.median_multiple ?? 0),
+        curve_shift_x: round4(Math.exp(fit.shiftFor(category))),
+        ranked: rankedByCategory.get(category) ?? 0,
+      };
+    })
+    .filter((c) => c.peers > 0 || c.ranked > 0)
+    .sort((x, y) => y.ranked - x.ranked || y.peers - x.peers || (x.category < y.category ? -1 : 1))
+    .slice(0, 14);
   const radar: RadarData = {
     as_of: snapshot.as_of,
     source: snapshot.source,
@@ -967,7 +1041,11 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     model,
     model_version: MODEL_VERSION,
     fit: { a: round4(fit.a), b: round4(fit.b), r2: round4(fit.r2), peers: fit.peers },
-    odds: { global_rate: round4(odds.global), cohorts: odds.cohorts },
+    odds: {
+      global_rate: round4(odds.global),
+      cohorts: odds.cohorts,
+      buckets: odds.buckets.map((b) => ({ n: b.n, rate: round4(b.rate) })),
+    },
     validation: validateModel(snapshot, model),
     coverage: {
       total: snapshot.protocols.length,
@@ -975,6 +1053,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
       live: liveTotal,
       excluded: snapshot.protocols.length - board.length - liveTotal,
     },
+    categories,
     watchlist_size: snapshot.watchlist.length,
     board_size: board.length,
     early_size: early,
