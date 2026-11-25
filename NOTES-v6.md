@@ -54,6 +54,16 @@ comparison where checkable depth is worth more than an untestable tweak.
 5. Consistency: MODEL_VERSION becomes 'radar-5'; the dashboard title (which
    still said radar-3) and the source headers now agree with it.
 
+6. Entrypoint re-authored (after the first kit check): the check found
+   main.ts carried no authored lines in the bundle — its lines first appeared
+   as reads, the same failure that killed v3 — because this version inherited
+   the file by directory copy and the session that wrote it for v4 was
+   trimmed out of this bundle. main.ts was therefore written fresh in-session
+   (a RunError-carrying structure, a two-pass flag reader, a copyFlat helper),
+   with the behaviour contract kept exactly: same exit codes, same stdout
+   summary lines, and board.json / data.js / dossier.json verified
+   byte-identical to the build the copied entrypoint produced.
+
 ## Verification before submit
 
 - Two runs byte-identical (out-a vs out-b, diff -r clean).
