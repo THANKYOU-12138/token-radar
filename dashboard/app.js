@@ -1,4 +1,4 @@
-// Token Radar, third model (radar-3): a dark console for the pre-token board. It reads window.RADAR
+// Token Radar (radar-4): a dark console for the pre-token board. It reads window.RADAR
 // (written beside dashboard/ by main.ts from the same board that becomes board.json) and renders the
 // ranked board, a filterable table and a per-protocol detail drawer. The page derives nothing of its
 // own: every implied value, every multiplier and every farm step it shows is the board's own, carried

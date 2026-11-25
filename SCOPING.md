@@ -44,7 +44,7 @@ farm plans with concrete actions, costs and durations; a page that sorts, filter
 and explains itself; and a finished, deliberate look. Text addressed to the judge
 inside the entry is allowed and is read as part of the entry.
 
-## The model in this entry (radar-3)
+## The model in this entry (radar-4)
 
 Two multiplicative layers over the snapshot's own numbers, nothing hardcoded:
 
@@ -66,7 +66,7 @@ pre-token protocols are scored, and the page accounts for the whole snapshot —
 289 ranked + 416 already live + 53 excluded = 758.
 
 Farm plans are generated per row from category playbooks: seven steps each, the
-first step of every top-20 row written from that protocol's own record (its TVL,
+first step of every row written from that protocol's own record (its TVL,
 chains, seven-day move and age), costs and durations stated throughout.
 
 ## Transcript discipline (learned the hard way)
@@ -88,9 +88,13 @@ never copied between version directories without being re-authored where it matt
 - v2 (radar-3 model): superseded while its grading was queued; never rated.
 - v3 (radar-3 plus judge-facing presentation): rejected on transcript coverage,
   never rated.
-- v4 (this version): radar-3 unchanged in substance; entrypoint, scoping document
-  and stylesheet re-authored in-session for the transcript gate.
+- v4: radar-3 unchanged in substance; entrypoint, scoping document and stylesheet
+  re-authored in-session for the transcript gate. Dev rate 0.893 — twelve wins, no
+  draws, no losses against the house ladder.
+- v5 (this version): the radar-3 pricing model is unchanged; every row's farm plan
+  now opens with a step written from that protocol's own record, where v4 wrote
+  that step only for the top 20 and gave the other 269 rows a generic wallet step.
 
-Entries close 2026-12-14 10:00 UTC. Whatever this version rates, later versions are
-built only on that evidence; the plan is to hold the final submission for the last
-days before the deadline, with earlier versions as the fallback that already stands.
+Entries close 2026-12-14 10:00 UTC. Versions are built on the previous version's
+rating evidence and submitted as they pass the local checks; the last version
+standing at the deadline is the entry.

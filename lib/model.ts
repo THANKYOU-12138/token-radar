@@ -1,4 +1,7 @@
-// The token radar's model (radar-3): one snapshot of the protocol universe in, one ranked board out.
+// The token radar's model (radar-4): one snapshot of the protocol universe in, one ranked board out.
+// radar-4 keeps radar-3's pricing exactly as it was — the same fitted curve, the same launch
+// odds, the same multipliers — and changes only the farm plans: every row now opens with a step
+// written from that protocol's own record, where radar-3 wrote that step only for the top 20.
 //
 // The board ranks EVERY rankable pre-token protocol in the snapshot (pre-token: no market cap, no
 // CoinGecko id, no symbol on record; rankable: not a CEX, not a versioned pool of another protocol).
@@ -101,7 +104,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-3';
+export const MODEL_VERSION = 'radar-4';
 
 /** Age cohorts for the launch-odds layer, in days: under a year, one to two, two to three, older. */
 export const ODDS_AGE_BUCKETS = [365, 730, 1095];
@@ -616,7 +619,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       size_multiplier: round4(s.sizeMult),
       age_days: s.age,
     },
-    farm_steps: farmSteps(s.p, s.age, i < 20).map(stepText),
+    farm_steps: farmSteps(s.p, s.age).map(stepText),
   }));
 }
 
@@ -850,10 +853,11 @@ function spotlightText(p: SnapshotProtocol, age: number | null): string {
 /**
  * A protocol's farm plan: seven steps, each an action with a cost and a time. The plan is a
  * playbook for the protocol's category, priced and placed from its own record (chains, TVL, age) —
- * never from a hand-written list of names. The board's top 20 rows open with a spotlight step
- * written from the protocol's own figures instead of the generic wallet step.
+ * never from a hand-written list of names. Every row opens with a step written from the
+ * protocol's own figures — its TVL, chains, seven-day move and age — and the wallet-hygiene
+ * advice rides at the end of that same step, so no row on the board opens generically.
  */
-export function farmSteps(p: SnapshotProtocol, age: number | null, spotlight = false): FarmStep[] {
+export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
   const chain = chainOf(p);
   const x: PlanContext = {
     name: p.name,
@@ -866,7 +870,7 @@ export function farmSteps(p: SnapshotProtocol, age: number | null, spotlight = f
   const book = PLAYBOOKS[familyFor(p.category)];
   return [
     {
-      text: spotlight ? spotlightText(p, age) : `Use a fresh wallet that holds only the funds you plan to farm with ${x.name}, and keep its seed phrase offline.`,
+      text: spotlightText(p, age),
       cost: 'nothing to create, under $3 of gas to fund',
       time: '5 minutes',
     },
