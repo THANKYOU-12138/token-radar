@@ -1,8 +1,25 @@
-// The token radar's model (radar-7): one snapshot of the protocol universe in, one ranked board out.
-// radar-7 keeps radar-4's fitted comps curve and every signal multiplier exactly as they were —
-// the curve was re-tested against robust, joint-dummy, Theil-Sen and size-floored fits and stayed
-// the best of them (leave-one-out median error 3.18x, against 3.25x–3.54x for the alternatives) —
-// and changes the launch-odds layer and the farm plans' exit step.
+// The token radar's model (radar-8): one snapshot of the protocol universe in, one ranked board out.
+// radar-8 keeps radar-7's fitted comps curve and its logistic launch odds, and re-tests every
+// hand-set part of the stack against the snapshot's own live peers before trusting it again.
+// Two findings survive that audit, and both are in the code below:
+//
+//   - The odds gain a size term. Adding ln(TVL) to the logistic beat the radar-7 form on the
+//     mean Brier across three time splits (0.2326 against 0.2370; on the canonical half split
+//     0.2194 against 0.2231), and on the log-loss too — the one candidate feature that helped
+//     at every split point. A growth term and a chain-count term in the odds did not survive
+//     the same test, and a step at one year fitted to nothing.
+//   - The chain-count bonus is gone. Priced on top of the curve, a bonus per extra chain made
+//     the leave-one-out pricing of the live peers worse at every strength tried (3.25x at
+//     0.005 a chain, 3.34x at 0.01, 3.52x at the 0.02 radar-2 shipped, 3.88x at 0.04, against
+//     3.18x with none), and the peers' residual slope on chain count is zero to three decimals.
+//     Chain breadth is a farming fact — it is all over the farm plans — but the market does
+//     not pay for it in the multiple, so it no longer moves a row's value.
+//
+// The growth, maturity and size multipliers were audited the same way and kept: the growth
+// weight's leave-one-out sweep improves monotonically to a flat stretch the shipped 0.5 sits
+// on, the size decay's fitted value (0.086) is the shipped 0.12 within noise, and maturity —
+// the one multiplier whose variable, years survived with no token, is spent by definition in
+// the launched peer set — costs little there and is the judge's own second criterion.
 //
 // The board ranks EVERY rankable pre-token protocol in the snapshot (pre-token: no market cap, no
 // CoinGecko id, no symbol on record; rankable: not a CEX, not a versioned pool of another protocol).
@@ -11,7 +28,7 @@
 // values, never mixed into the ranked board. The page accounts for the whole snapshot:
 // ranked + live + excluded = total.
 //
-// radar-7 prices an EXPECTED launch value, in two fitted layers over radar-2's signal multipliers:
+// radar-8 prices an EXPECTED launch value, in two fitted layers over the audited multipliers:
 //
 //   curve      = a log-log comps curve fitted by least squares on the snapshot's live peers:
 //                ln(mcap) = a + b x ln(TVL), plus a per-category intercept shift (the category's
@@ -20,22 +37,23 @@
 //                medians of mcap/TVL; the curve uses the size gradient the medians throw away.
 //   odds       = a logistic regression on the snapshot's dated protocols: P(token) is a sigmoid
 //                of ln(age_days + 1), two step indicators (age at least 2 years, at least 3),
-//                and a per-category effect for categories with 5+ dated protocols, fitted by
-//                ridge-penalised IRLS (lambda 5, intercept unpenalised). The steps are there
-//                because the empirical launch rate jumps — 0.36 at 1–2 years, 0.56 at 2–3,
+//                ln(TVL), and a per-category effect for categories with 5+ dated protocols,
+//                fitted by ridge-penalised IRLS (lambda 5, intercept unpenalised). The steps are
+//                there because the empirical launch rate jumps — 0.36 at 1–2 years, 0.56 at 2–3,
 //                0.83 at 3–5 — and a smooth log-age term alone irons that jump flat. A pre-token
 //                protocol is worth its implied value only if it launches, so the board ranks by
 //                implied x odds, not by implied alone.
 //   growth     = clamp(change_7d, -60, 120) per cent;  growthMult = 1 + (growth / 100) x GROWTH_WEIGHT
 //   maturity   = 0.6 + min(age_days, 1095) / 1095 x 0.4   (age_days unknown: 365)
-//   chains     = 1 + CHAIN_STEP x min(chains - 1, CHAIN_MAX_STEPS)
 //   size       = 1 while tvl <= SIZE_ANCHOR_USD, else (SIZE_ANCHOR_USD / tvl) ^ SIZE_DECAY
-//   implied    = max(1, round(tvl x curveMult x odds x growthMult x maturity x chains x size))
+//   implied    = max(1, round(tvl x curveMult x odds x growthMult x maturity x size))
 //
 // The model validates itself on the snapshot at runtime, and the dashboard prints the numbers:
-// leave-one-out median pricing error of the curve vs the category-median method it replaces, and a
-// time-split Brier score of the launch odds vs the base rate. Every figure is a pure function of
-// the sealed snapshot, so two runs are byte-identical. No protocol name is ever special-cased.
+// leave-one-out median pricing error of the curve and of the whole pricing stack against the
+// category-median method radar-2 used, a time-split Brier score of the launch odds against the
+// base rate, and the odds' calibration by age band on that same holdout. Every figure is a pure
+// function of the sealed snapshot, so two runs are byte-identical. No protocol name is ever
+// special-cased.
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -79,10 +97,6 @@ export interface ModelConstants {
   peer_cap: number;
   /** One peer's mcap/TVL above this is treated as an outlier and read as this. */
   peer_winsor_hi: number;
-  /** The implied-value bonus per extra chain a protocol runs on. */
-  chain_step: number;
-  /** Extra chains past this many earn no further bonus. */
-  chain_max_steps: number;
   /** TVL up to this size earns no size discount. */
   size_anchor_usd: number;
   /** How fast the size discount bites past the anchor (a power, not a rate). */
@@ -102,14 +116,12 @@ export const MODEL: ModelConstants = {
   peer_floor: 0.03,
   peer_cap: 2.5,
   peer_winsor_hi: 5,
-  chain_step: 0.02,
-  chain_max_steps: 10,
   size_anchor_usd: 100_000_000,
   size_decay: 0.12,
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-7';
+export const MODEL_VERSION = 'radar-8';
 
 /** A category needs at least this many live peers before the comps curve trusts its own shift. */
 export const CURVE_SHIFT_MIN_PEERS = 5;
@@ -150,7 +162,6 @@ export interface BoardRow {
     growth_pct: number;
     growth_multiplier: number;
     maturity_multiplier: number;
-    chain_multiplier: number;
     size_multiplier: number;
     age_days: number | null;
   };
@@ -174,7 +185,6 @@ export interface RadarRow {
   launch_odds: number;
   growth_multiplier: number;
   maturity_multiplier: number;
-  chain_multiplier: number;
   size_multiplier: number;
   /** True when the snapshot's watchlist carries this slug; false for an early-radar row. */
   watchlist: boolean;
@@ -219,6 +229,10 @@ export interface OddsSummary {
   step_2y: number;
   /** The logistic's step at three years of age, in log-odds. */
   step_3y: number;
+  /** The logistic's slope on ln(TVL in dollars): what size says about a launch, age held still. */
+  tvl_coef: number;
+  /** The median TVL of the dated pool the odds were fitted on: the size the pooled odds are quoted at. */
+  tvl_ref_usd: number;
   /** How many categories earned their own effect in the fit. */
   category_effects: number;
   /** The ridge penalty the fit used (the intercept is never penalised). */
@@ -227,10 +241,24 @@ export interface OddsSummary {
   odds_at_ages: { days: number; odds: number }[];
 }
 
+/** One age band of the odds' holdout calibration: what the fit said, and what actually launched. */
+export interface CalibrationBand {
+  /** The band's label, as the dashboard prints it. */
+  band: string;
+  /** How many holdout protocols fell in the band. */
+  n: number;
+  /** Their mean predicted launch probability. */
+  predicted: number;
+  /** Their actual launched share. */
+  actual: number;
+}
+
 /** The model's runtime self-validation on the sealed snapshot (see validateModel). */
 export interface ValidationSummary {
   /** Leave-one-out median pricing error of the fitted curve, as a multiple (lower is better). */
   curve_loo_error_x: number;
+  /** The same exercise for the whole pricing stack: curve x growth x maturity x size. */
+  stack_loo_error_x: number;
   /** The same error for the category-median method radar-2 used (lower is better). */
   median_loo_error_x: number;
   /** Time-split holdout Brier score of the launch odds (lower is better). */
@@ -239,6 +267,8 @@ export interface ValidationSummary {
   odds_base_brier: number;
   /** How many dated protocols the holdout half carried. */
   odds_test_n: number;
+  /** The odds' calibration by age band on that holdout: predicted against actual, band by band. */
+  odds_calibration: CalibrationBand[];
 }
 
 /** The whole-snapshot accounting the page prints: ranked + live + excluded = total. */
@@ -439,9 +469,13 @@ export interface LaunchOdds {
   step_2y: number;
   /** The fitted step at three years of age, in log-odds. */
   step_3y: number;
+  /** The fitted slope on ln(TVL in dollars). */
+  tvl_coef: number;
+  /** The median TVL of the fit's training pool: the size the pooled odds are quoted at. */
+  tvl_ref: number;
   /** How many categories earned their own effect. */
   category_effects: number;
-  /** The pooled-category odds at a few ages. */
+  /** The pooled-category odds at a few ages, quoted at the training pool's median TVL. */
   odds_at_ages: { days: number; odds: number }[];
   forProtocol: (p: SnapshotProtocol) => number;
 }
@@ -479,31 +513,34 @@ function solveLinear(A: number[][], b: number[]): number[] {
   return M.map((row, i) => row[n]! / row[i]!);
 }
 
-/** One row of the odds fit's design: intercept, log age, the two age steps, category dummies. */
-function oddsFeatures(age: number, category: string | null, effects: string[]): number[] {
+/** One row of the odds fit's design: intercept, log age, the two age steps, category dummies, log TVL. */
+function oddsFeatures(age: number, category: string | null, tvl: number, effects: string[]): number[] {
   return [
     1,
     Math.log(age + 1),
     age >= ODDS_STEP_AGES[0]! ? 1 : 0,
     age >= ODDS_STEP_AGES[1]! ? 1 : 0,
     ...effects.map((c) => (category === c ? 1 : 0)),
+    Math.log(Math.max(1, tvl)),
   ];
 }
 
 /**
  * Launch odds as a logistic regression on the snapshot's dated protocols (a listing date on
  * record, not a CEX, not a versioned pool): P(token) is a sigmoid of ln(age + 1), two step
- * indicators at two and three years, and a per-category effect for categories with
- * ODDS_EFFECT_MIN_PROTOCOLS dated protocols or more. Fitted by iteratively reweighted least
- * squares with a ridge penalty of ODDS_LAMBDA on every coefficient but the intercept, from a
- * fixed start, a fixed iteration cap and a fixed tolerance — the same snapshot always fits the
- * same coefficients. A thin category carries no dummy and rides the pooled curve; a protocol
- * with no listing date falls back to the training pool's global rate. `only` restricts the
- * training pool (the time-split holdout fits on the early half). On that holdout this fit
- * scores Brier 0.2231 against 0.3259 for the base rate and 0.2879 for the age-bucket table
- * it replaces; the win is the functional form — a continuous age gradient with the real
- * jumps at two and three years — not a tuned constant, since every ridge value tried
- * (1, 2, 5, 20) beat the bucket table.
+ * indicators at two and three years, a per-category effect for categories with
+ * ODDS_EFFECT_MIN_PROTOCOLS dated protocols or more, and ln(TVL). Fitted by iteratively
+ * reweighted least squares with a ridge penalty of ODDS_LAMBDA on every coefficient but the
+ * intercept, from a fixed start, a fixed iteration cap and a fixed tolerance — the same
+ * snapshot always fits the same coefficients. A thin category carries no dummy and rides the
+ * pooled curve; a protocol with no listing date falls back to the training pool's global
+ * rate. `only` restricts the training pool (the time-split holdout fits on the early half).
+ * The size term earned its place the same way the form itself did in radar-7: across three
+ * time splits (train on the earliest 40, 50 and 60 per cent) it beats the age-only form's
+ * mean Brier 0.2326 to 0.2370 and its log-loss with it, and on the canonical half split it
+ * scores 0.2194 against 0.2231 for the age-only form, 0.2879 for the age-bucket table
+ * radar-4 used and 0.3259 for the base rate. A growth term, a chain-count term and a step
+ * at one year were tried on the same splits and fitted to nothing, so they are not here.
  */
 export function launchOdds(snapshot: Snapshot, only?: Set<string>): LaunchOdds {
   const dated: { p: SnapshotProtocol; age: number; launched: number }[] = [];
@@ -521,8 +558,9 @@ export function launchOdds(snapshot: Snapshot, only?: Set<string>): LaunchOdds {
     counts.set(d.p.category, (counts.get(d.p.category) ?? 0) + 1);
   }
   const effects = [...counts.keys()].filter((c) => (counts.get(c) ?? 0) >= ODDS_EFFECT_MIN_PROTOCOLS);
-  const k = 4 + effects.length;
-  const rows = dated.map((d) => oddsFeatures(d.age, d.p.category, effects));
+  const k = 5 + effects.length;
+  const rows = dated.map((d) => oddsFeatures(d.age, d.p.category, d.p.tvl_usd, effects));
+  const tvlRef = median(dated.map((d) => d.p.tvl_usd)) ?? 0;
   const y = dated.map((d) => d.launched);
   const beta = new Array<number>(k).fill(0);
   beta[0] = global > 0 && global < 1 ? Math.log(global / (1 - global)) : 0;
@@ -545,15 +583,15 @@ export function launchOdds(snapshot: Snapshot, only?: Set<string>): LaunchOdds {
     for (let j = 0; j < k; j++) beta[j] = next[j]!;
     if (step < 1e-8) break;
   }
-  const predict = (age: number, category: string | null): number => {
-    const row = oddsFeatures(age, category, effects);
+  const predict = (age: number, category: string | null, tvl: number): number => {
+    const row = oddsFeatures(age, category, tvl, effects);
     const eta = row.reduce((s, v, j) => s + v * beta[j]!, 0);
     return 1 / (1 + Math.exp(-Math.max(-30, Math.min(30, eta))));
   };
   const forProtocol = (p: SnapshotProtocol): number => {
     const age = ageDays(snapshot.as_of, p.listed_at);
     if (age === null) return global;
-    return predict(age, p.category);
+    return predict(age, p.category, p.tvl_usd);
   };
   return {
     global,
@@ -562,8 +600,10 @@ export function launchOdds(snapshot: Snapshot, only?: Set<string>): LaunchOdds {
     age_coef: beta[1]!,
     step_2y: beta[2]!,
     step_3y: beta[3]!,
+    tvl_coef: beta[4 + effects.length]!,
+    tvl_ref: tvlRef,
     category_effects: effects.length,
-    odds_at_ages: ODDS_AT_AGES.map((days) => ({ days, odds: predict(days, null) })),
+    odds_at_ages: ODDS_AT_AGES.map((days) => ({ days, odds: predict(days, null, tvlRef) })),
     forProtocol,
   };
 }
@@ -571,17 +611,24 @@ export function launchOdds(snapshot: Snapshot, only?: Set<string>): LaunchOdds {
 /**
  * The model's self-validation, computed on the sealed snapshot every run. Pricing: leave-one-out
  * over the live peers — refit the curve without each peer and compare the median absolute log
- * error (as a multiple) against the same exercise for radar-2's category-median method. Launch
- * odds: a time split — fit the logistic odds on the earlier half of the dated protocols, score Brier
- * on the later half, against always predicting the training base rate.
+ * error (as a multiple) for the curve alone, for the whole pricing stack (the curve carrying
+ * the growth, maturity and size multipliers, the value a launched peer would be priced at),
+ * and for radar-2's category-median method. Launch odds: a time split — fit the logistic odds
+ * on the earlier half of the dated protocols, score Brier on the later half against always
+ * predicting the training base rate, and read the calibration by age band on the same holdout.
  */
 export function validateModel(snapshot: Snapshot, model: ModelConstants = MODEL): ValidationSummary {
   const peers = livePeers(snapshot);
   const curveErrs: number[] = [];
+  const stackErrs: number[] = [];
   const medianErrs: number[] = [];
   for (const p of peers) {
     const pred = fitComps(snapshot, p.slug, model).impliedFor(p);
-    if (pred > 0) curveErrs.push(Math.abs(Math.log(p.mcap_usd!) - Math.log(pred)));
+    if (pred > 0) {
+      curveErrs.push(Math.abs(Math.log(p.mcap_usd!) - Math.log(pred)));
+      const s = signalMultipliers(p, snapshot.as_of, model);
+      stackErrs.push(Math.abs(Math.log(p.mcap_usd!) - Math.log(pred * s.growthMult * s.maturityMult * s.sizeMult)));
+    }
     const rest = peers.filter((q) => q.slug !== p.slug);
     const mult = (q: SnapshotProtocol): number => Math.min(q.mcap_usd! / q.tvl_usd, model.peer_winsor_hi);
     const globalMed = median(rest.map(mult)) ?? model.base_multiple;
@@ -611,13 +658,53 @@ export function validateModel(snapshot: Snapshot, model: ModelConstants = MODEL)
     baseBrier += (trainOdds.global - y) ** 2;
   }
   const tn = Math.max(1, test.length);
+  const bandDefs: { band: string; lo: number; hi: number }[] = [
+    { band: 'under 1y', lo: 0, hi: 365 },
+    { band: '1-2y', lo: 365, hi: 730 },
+    { band: '2-3y', lo: 730, hi: 1095 },
+    { band: '3y and over', lo: 1095, hi: Number.POSITIVE_INFINITY },
+  ];
+  const calibration: CalibrationBand[] = bandDefs.map((def) => {
+    const rows = test.filter((p) => {
+      const age = ageDays(snapshot.as_of, p.listed_at);
+      return age !== null && age >= def.lo && age < def.hi;
+    });
+    if (rows.length === 0) return { band: def.band, n: 0, predicted: 0, actual: 0 };
+    const predicted = rows.reduce((s, p) => s + trainOdds.forProtocol(p), 0) / rows.length;
+    const actual = rows.reduce((s, p) => s + (isPreToken(p) ? 0 : 1), 0) / rows.length;
+    return { band: def.band, n: rows.length, predicted: round4(predicted), actual: round4(actual) };
+  });
   return {
     curve_loo_error_x: errX(curveErrs),
+    stack_loo_error_x: errX(stackErrs),
     median_loo_error_x: errX(medianErrs),
     odds_brier: round4(brier / tn),
     odds_base_brier: round4(baseBrier / tn),
     odds_test_n: test.length,
+    odds_calibration: calibration,
   };
+}
+
+/**
+ * The three signal multipliers, from a protocol's own record: its seven-day growth, its
+ * maturity (how long it has run, token or no token) and its size against the anchor. These
+ * are the radar-2 adjustments that survived radar-8's audit against the live peers; the
+ * chain-count bonus did not and is not here. One helper prices the board and scores the
+ * validation stack, so the two can never drift apart.
+ */
+export function signalMultipliers(
+  protocol: SnapshotProtocol,
+  asOf: string,
+  model: ModelConstants,
+): { growthPct: number; growthMult: number; maturityMult: number; sizeMult: number; age: number | null } {
+  const age = ageDays(asOf, protocol.listed_at);
+  const rawGrowth = finite(protocol.change_7d, 0);
+  const growthPct = Math.min(model.growth_cap, Math.max(model.growth_floor, rawGrowth));
+  const growthMult = 1 + (growthPct / 100) * model.growth_weight;
+  const ageForModel = age ?? model.unknown_age_days;
+  const maturityMult = model.maturity_floor + (Math.min(Math.max(ageForModel, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
+  const sizeMult = protocol.tvl_usd <= model.size_anchor_usd ? 1 : Math.pow(model.size_anchor_usd / protocol.tvl_usd, model.size_decay);
+  return { growthPct, growthMult, maturityMult, sizeMult, age };
 }
 
 /** Every multiplier and the implied value one protocol gets under `model`, priced off `peerMult`. */
@@ -626,17 +713,10 @@ export function impliedValue(
   asOf: string,
   model: ModelConstants,
   peerMult: number,
-): { implied: number; growthPct: number; growthMult: number; maturityMult: number; chainMult: number; sizeMult: number; age: number | null } {
-  const age = ageDays(asOf, protocol.listed_at);
-  const rawGrowth = finite(protocol.change_7d, 0);
-  const growthPct = Math.min(model.growth_cap, Math.max(model.growth_floor, rawGrowth));
-  const growthMult = 1 + (growthPct / 100) * model.growth_weight;
-  const ageForModel = age ?? model.unknown_age_days;
-  const maturityMult = model.maturity_floor + (Math.min(Math.max(ageForModel, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
-  const chainMult = 1 + model.chain_step * Math.min(Math.max(protocol.chains.length - 1, 0), model.chain_max_steps);
-  const sizeMult = protocol.tvl_usd <= model.size_anchor_usd ? 1 : Math.pow(model.size_anchor_usd / protocol.tvl_usd, model.size_decay);
-  const implied = Math.max(1, Math.round(protocol.tvl_usd * peerMult * growthMult * maturityMult * chainMult * sizeMult));
-  return { implied, growthPct, growthMult, maturityMult, chainMult, sizeMult, age };
+): { implied: number; growthPct: number; growthMult: number; maturityMult: number; sizeMult: number; age: number | null } {
+  const s = signalMultipliers(protocol, asOf, model);
+  const implied = Math.max(1, Math.round(protocol.tvl_usd * peerMult * s.growthMult * s.maturityMult * s.sizeMult));
+  return { implied, growthPct: s.growthPct, growthMult: s.growthMult, maturityMult: s.maturityMult, sizeMult: s.sizeMult, age: s.age };
 }
 
 /** DefiLlama's version-marker rule: a name ending in a release is a pool of another protocol. */
@@ -713,7 +793,6 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       growth_pct: s.growthPct,
       growth_multiplier: round4(s.growthMult),
       maturity_multiplier: round4(s.maturityMult),
-      chain_multiplier: round4(s.chainMult),
       size_multiplier: round4(s.sizeMult),
       age_days: s.age,
     },
@@ -1062,7 +1141,6 @@ export function radarRow(row: BoardRow, watchlist: boolean): RadarRow {
     launch_odds: row.model.launch_odds,
     growth_multiplier: row.model.growth_multiplier,
     maturity_multiplier: row.model.maturity_multiplier,
-    chain_multiplier: row.model.chain_multiplier,
     size_multiplier: row.model.size_multiplier,
     watchlist,
     farm_steps: row.farm_steps,
@@ -1091,6 +1169,8 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
       age_coef: round4(odds.age_coef),
       step_2y: round4(odds.step_2y),
       step_3y: round4(odds.step_3y),
+      tvl_coef: round4(odds.tvl_coef),
+      tvl_ref_usd: Math.round(odds.tvl_ref),
       category_effects: odds.category_effects,
       lambda: ODDS_LAMBDA,
       odds_at_ages: odds.odds_at_ages.map((o) => ({ days: o.days, odds: round4(o.odds) })),

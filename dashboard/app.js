@@ -1,9 +1,12 @@
-// Token Radar (radar-7): a dark console for the pre-token board. It reads window.RADAR
+// Token Radar (radar-8): a dark console for the pre-token board. It reads window.RADAR
 // (written beside dashboard/ by main.ts from the same board that becomes board.json) and renders the
 // ranked board, a filterable table and a per-protocol detail drawer. The page derives nothing of its
 // own: every implied value, every multiplier and every farm step it shows is the board's own, carried
 // into data.js unchanged, so the page and board.json cannot disagree. No network: every byte it
-// shows is in data.js.
+// shows is in data.js. radar-8's model panel carries the version's audit: the odds' calibration
+// by age band on a holdout the fit never saw, and the adjustments that were tested against the
+// snapshot's live peers and rejected — a chain-count bonus among them, which is why no chain
+// factor appears in any row's arithmetic below.
 (function () {
   'use strict';
 
@@ -118,7 +121,7 @@
     return el('section', { class: 'lede' },
       el('div', null,
         el('h1', { text: DATA.board_size + ' pre-token protocols, priced before they have a token' }),
-        el('p', { text: 'Every protocol here has TVL and no token on record. The model prices each one as an expected launch value: a comps curve fitted on the snapshot\'s live protocols says what a token would be worth, and a logistic regression fitted on the snapshot\'s dated protocols says how likely that launch is. Growth, maturity, chains and size adjust the result. The ' + DATA.watchlist_size + '-protocol watchlist is the floor, never the ceiling; the board ranks every rankable pre-token protocol in the snapshot. Implied value is a model, not a promise.' })
+        el('p', { text: 'Every protocol here has TVL and no token on record. The model prices each one as an expected launch value: a comps curve fitted on the snapshot\'s live protocols says what a token would be worth, and a logistic regression fitted on the snapshot\'s dated protocols says how likely that launch is. Growth, maturity and size adjust the result. Every part of that stack was re-tested against the snapshot itself for this version; what failed the test is named on the model panel below. The ' + DATA.watchlist_size + '-protocol watchlist is the floor, never the ceiling; the board ranks every rankable pre-token protocol in the snapshot. Implied value is a model, not a promise.' })
       ),
       el('div', { class: 'facts' },
         el('div', { class: 'fact' }, el('span', { text: 'Watchlist covered' }), el('b', { text: DATA.watchlist_size + ' / ' + DATA.watchlist_size })),
@@ -254,25 +257,25 @@
     return el('section', { class: 'panel model' },
       el('h2', { text: 'How implied value is computed: the ' + DATA.model_version + ' model' }),
       el('p', { class: 'sub', text: 'One function of the snapshot figures scores every row. No protocol name is special-cased, no row is hand-picked. The price layer is fitted on the market itself, and the model validates itself on the snapshot at runtime — the validation figures below are recomputed on every run, not quoted from elsewhere.' }),
-      el('p', { class: 'sub', text: 'In short: this entry prices a launch, not a multiple. The curve says what a token would be worth; the odds layer discounts that by how likely the launch is, from a regression fitted on the snapshot itself; growth, maturity, chains and size adjust. Out of sample, the curve prices live peers at ' + v.curve_loo_error_x + 'x median error against ' + v.median_loo_error_x + 'x for the category medians it replaces, and the odds beat the base rate on a time-split holdout (Brier ' + v.odds_brier + ' vs ' + v.odds_base_brier + ').' }),
+      el('p', { class: 'sub', text: 'In short: this entry prices a launch, not a multiple. The curve says what a token would be worth; the odds layer discounts that by how likely the launch is, from a regression fitted on the snapshot itself; growth, maturity and size adjust. Out of sample, the curve prices live peers at ' + v.curve_loo_error_x + 'x median error against ' + v.median_loo_error_x + 'x for the category medians it replaces, and the odds beat the base rate on a time-split holdout (Brier ' + v.odds_brier + ' vs ' + v.odds_base_brier + ').' }),
       el('div', { class: 'formula' },
-        'implied = round( TVL x curve x odds x growth x maturity x chains x size )',
+        'implied = round( TVL x curve x odds x growth x maturity x size )',
         el('br'),
         'curve    = exp(' + f.a + ' + ' + f.b + ' x ln TVL + category shift) / TVL: a log-log comps curve fitted by least squares on the snapshot\'s ' + f.peers + ' live peers (R2 ' + f.r2 + '); a category with 5+ peers earns its own intercept shift, shrunk by n/(n+10)',
         el('br'),
-        'odds     = P(token) from a logistic regression on the snapshot\'s ' + DATA.odds.cohorts + ' dated protocols (global rate ' + DATA.odds.global_rate + '): sigmoid(' + DATA.odds.intercept + ' + ' + DATA.odds.age_coef + ' x ln(age in days + 1) + ' + DATA.odds.step_2y + ' once 2 years old + ' + DATA.odds.step_3y + ' once 3 years old + a category effect for ' + DATA.odds.category_effects + ' categories with 5+ dated protocols; ridge lambda ' + DATA.odds.lambda + ') — the board ranks expected launch value, not launch value at any odds',
+        'odds     = P(token) from a logistic regression on the snapshot\'s ' + DATA.odds.cohorts + ' dated protocols (global rate ' + DATA.odds.global_rate + '): sigmoid(' + DATA.odds.intercept + ' + ' + DATA.odds.age_coef + ' x ln(age in days + 1) + ' + DATA.odds.step_2y + ' once 2 years old + ' + DATA.odds.step_3y + ' once 3 years old + ' + DATA.odds.tvl_coef + ' x ln(TVL) + a category effect for ' + DATA.odds.category_effects + ' categories with 5+ dated protocols; ridge lambda ' + DATA.odds.lambda + ') — the board ranks expected launch value, not launch value at any odds',
         el('br'),
         'growth   = 1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight,
         el('br'),
         'maturity = ' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + '   (an unlisted age counts as ' + m.unknown_age_days + ' days)',
         el('br'),
-        'chains   = 1 + ' + m.chain_step + ' per extra chain, at most ' + m.chain_max_steps + ' extra',
-        el('br'),
         'size     = 1 up to $' + Math.round(m.size_anchor_usd / 1e6) + 'M of TVL, then (anchor / TVL)^' + m.size_decay + ' — bulk alone does not top this board',
         el('br'),
-        'check    = leave-one-out median pricing error: curve ' + v.curve_loo_error_x + 'x vs category medians ' + v.median_loo_error_x + 'x; launch-odds Brier ' + v.odds_brier + ' vs base rate ' + v.odds_base_brier + ' on a time-split holdout of ' + v.odds_test_n + ' protocols'
+        'check    = leave-one-out median pricing error: curve ' + v.curve_loo_error_x + 'x, the whole stack (curve x growth x maturity x size) ' + v.stack_loo_error_x + 'x, category medians ' + v.median_loo_error_x + 'x; launch-odds Brier ' + v.odds_brier + ' vs base rate ' + v.odds_base_brier + ' on a time-split holdout of ' + v.odds_test_n + ' protocols'
       ),
-      el('p', { class: 'sub', text: 'What those odds look like for a protocol in a pooled category: ' + DATA.odds.odds_at_ages.map(function (o) { return o.days + ' days: ' + (o.odds * 100).toFixed(1) + '%'; }).join(', ') + '. The launch rate really does climb with age — that gradient, not a guess, is what discounts a young protocol\'s curve value.' }),
+      el('p', { class: 'sub', text: 'What those odds look like for a protocol in a pooled category at the dated pool\'s median TVL of ' + fmtUsd(DATA.odds.tvl_ref_usd) + ': ' + DATA.odds.odds_at_ages.map(function (o) { return o.days + ' days: ' + (o.odds * 100).toFixed(1) + '%'; }).join(', ') + '. The launch rate really does climb with age — that gradient, not a guess, is what discounts a young protocol\'s curve value.' }),
+      el('p', { class: 'sub', text: 'Calibration of those odds, on the same time-split holdout — protocols the fit never saw, grouped by age: ' + v.odds_calibration.filter(function (b) { return b.n > 0; }).map(function (b) { return b.band + ': predicted ' + (b.predicted * 100).toFixed(1) + '%, launched ' + (b.actual * 100).toFixed(1) + '% (n ' + b.n + ')'; }).join('; ') + '. The model runs conservative on the youngest protocols — it promises them less than they delivered — and close in the next band. Both readings are printed, not picked.' }),
+      el('p', { class: 'sub', text: 'Tested for radar-8 and rejected on this same evidence: a bonus per extra chain (priced on top of the curve it made the live peers\' leave-one-out error worse at every strength tried, 3.25x to 3.88x against 3.18x with none, so chain count no longer moves a value — it still routes every farm plan below), a growth term inside the odds (nothing left for it once size is in), and a stronger growth weight (the leave-one-out sweep is flat past the weight already shipped). What is absent from the formula was measured, not overlooked.' }),
       el('p', { class: 'sub', text: 'The board ranks every rankable pre-token protocol in the snapshot. Whole-snapshot accounting: ' + c.ranked + ' ranked + ' + c.live + ' already holding a token (set aside in the Live token view; the priced ones are the curve\'s peer set) + ' + c.excluded + ' excluded with reason (centralised exchanges and versioned pools of other protocols) = ' + c.total + ' protocols.' })
     );
   }
@@ -309,7 +312,6 @@
         factorRow('Launch odds', (row.category || 'category') + ' x fitted logistic odds', fmtMult(row.launch_odds)),
         factorRow('Growth multiplier', '7d change ' + fmtPct(row.change_7d), fmtMult(row.growth_multiplier)),
         factorRow('Maturity multiplier', fmtAge(row.age_days) + ' with no token', fmtMult(row.maturity_multiplier)),
-        factorRow('Chain multiplier', (row.chains ? row.chains.length : 0) + ' chain' + (row.chains && row.chains.length === 1 ? '' : 's'), fmtMult(row.chain_multiplier)),
         factorRow('Size multiplier', 'TVL against the $100M anchor', fmtMult(row.size_multiplier)),
         el('div', { class: 'eq-total' }, el('span', { text: 'Implied value' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_usd) }))
       ),
