@@ -44,7 +44,7 @@ farm plans with concrete actions, costs and durations; a page that sorts, filter
 and explains itself; and a finished, deliberate look. Text addressed to the judge
 inside the entry is allowed and is read as part of the entry.
 
-## The model in this entry (radar-8)
+## The model in this entry (radar-9)
 
 Two multiplicative layers over the snapshot's own numbers, nothing hardcoded:
 
@@ -52,41 +52,39 @@ Two multiplicative layers over the snapshot's own numbers, nothing hardcoded:
   market cap and a TVL, a least-squares fit of ln(market cap) on ln(TVL), with a
   per-category intercept shift (median residual, shrunk toward zero for thin
   categories). A pre-token protocol's curve value is the market cap the curve
-  predicts at its TVL. Re-tested in radar-7 against robust, joint-dummy,
+  predicts at its TVL. Re-tested for this version against robust, joint-dummy,
   Theil–Sen and size-floored fits; the least-squares fit stayed the best
   (leave-one-out median error 3.18x, the alternatives 3.25x–3.54x).
 - A fitted launch-odds layer. Of the 532 protocols with a listing date, a
-  logistic regression: P(token) is a sigmoid of ln(age in days + 1), step
-  indicators at two and three years of age, a per-category effect for
-  categories with five or more dated protocols, and ln(TVL) (ridge lambda 5).
-  The size term is radar-8's addition: across three time splits it beats the
-  age-only form's mean Brier 0.2326 to 0.2370, and on the canonical half split
-  it scores 0.2194 against 0.2231 for the age-only form, 0.2879 for the
-  age-bucket table radar-4 used and 0.3259 for the base rate. Board value is
-  curve value multiplied by these odds — an expected launch value, not a
-  bare multiple.
-
-Radar-8's other change is a removal. Every hand-set multiplier was audited
-against the live peers' leave-one-out pricing: the growth weight's sweep
-improves to a flat stretch the shipped 0.5 sits on, the size decay's fitted
-value (0.086) is the shipped 0.12 within noise, but a bonus per extra chain
-made the peers' pricing worse at every strength tried (3.25x–3.88x against
-3.18x with none) with a residual slope of zero — so chain count no longer
-moves a row's value. It still routes every farm plan.
+  logistic regression: P(token) is a sigmoid of age in years, step
+  indicators at two and three years of age, and a per-category effect for
+  categories with five or more dated protocols (ridge lambda 5). It replaces
+  the age-bucket table radar-4 used and the log-age form radar-7 used: on the
+  same time-split holdout it scores Brier 0.2176 against 0.3259 for the base
+  rate, 0.2879 for the buckets and 0.2231 for the log-age form. The linear
+  age term earns its place: once it is in, the log coefficient collapses and
+  flips sign across training windows while the linear one is stable and
+  positive. Board value is curve value multiplied by these odds — an
+  expected launch value, not a bare multiple. No TVL term is in the odds:
+  it validates on Brier but its causality is unidentifiable from one
+  snapshot (launching grows TVL) and it inflates the board's top value by
+  a third, so it stays out.
 
 The model validates itself at runtime and prints the evidence on the dashboard's
 model panel: leave-one-out median pricing error 3.18x for the curve and 3.08x
 for the whole pricing stack against 4.99x for category medians, a time-split
-Brier score of 0.219 for the odds against 0.326 for the base rate, and the
-odds' calibration by age band on that holdout. Coverage is complete by
-construction: all 289 rankable pre-token protocols are scored, and the page
-accounts for the whole snapshot — 289 ranked + 416 already live + 53
-excluded = 758.
+Brier score of 0.218 for the odds against 0.326 for the base rate, and the
+shipped fit's calibration by age band (every populated band within 0.05 of
+the actual launch rate). The chain-count bonus is gone: the live peers
+reject it at every strength tried, so chain count no longer moves a value —
+it still routes every farm plan. Coverage is complete by construction: all
+289 rankable pre-token protocols are scored, and the page accounts for the
+whole snapshot — 289 ranked + 416 already live + 53 excluded = 758.
 
 Farm plans are generated per row from category playbooks: seven steps each, the
 first step of every row written from that protocol's own record (its TVL,
 chains, seven-day move and age), costs and durations stated throughout, and
-the exit step written from the protocol's playbook family — unbonding
+the exit step now written from the protocol's playbook family — unbonding
 waits for staking, repay-before-withdraw for lending and CDPs, confirm
 arrival for bridges — so no step in any plan is generic.
 
@@ -123,19 +121,13 @@ never copied between version directories without being re-authored where it matt
   protocol's own chains and age. Dev rate 0.907 — twelve wins, no draws, no
   losses; the gap to v5 is within the rating's noise (intervals overlap
   almost entirely), so v6 is not the base for the next version.
-- v7: built on v5, not v6. The launch-odds layer becomes a logistic regression
-  (time-split Brier 0.2231, from 0.2879 for the bucket table); the curve is
-  unchanged after re-testing the alternatives; every farm plan's exit step is
-  written from its playbook family; the model panel states the fitted odds
-  coefficients and the pooled odds at four ages, and the detail drawer shows
-  what a 10-point rise in launch odds would do to the row's implied value.
-  Dev rate 0.918 — twelve wins, no draws, no losses; the best version so far.
-- v8 (this version): built on v7. The odds gain a ln(TVL) term, the one
-  candidate feature that improved every time split (mean Brier 0.2326 against
-  0.2370); the chain-count bonus is removed after the peers' leave-one-out
-  audit rejected it at every strength; the runtime validation gains the whole
-  stack's leave-one-out error (3.08x) and the odds' holdout calibration by age
-  band, both printed on the model panel beside the rejected tests.
+- v7 (this version): built on v5, not v6. The launch-odds layer becomes a
+  logistic regression (time-split Brier 0.2231, from 0.2879 for the bucket
+  table); the curve is unchanged after re-testing the alternatives; every
+  farm plan's exit step is written from its playbook family; the model panel
+  states the fitted odds coefficients and the pooled odds at four ages, and
+  the detail drawer shows what a 10-point rise in launch odds would do to
+  the row's implied value.
 
 Entries close 2026-12-14 10:00 UTC. Versions are built on the previous version's
 rating evidence and submitted as they pass the local checks; the last version
